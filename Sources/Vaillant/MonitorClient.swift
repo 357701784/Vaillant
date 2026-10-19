@@ -100,13 +100,18 @@ final class MonitorClient: NSObject {
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
         request.setValue("Bearer \(token.prefix(12))…", forHTTPHeaderField: "Authorization")
-        // 威能按 UA 区分客户端；缺省 UA 会被网关拒绝。
-        request.setValue(Api.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(Api.appKey, forHTTPHeaderField: "appkey")
         request.timeoutInterval = 20
+        // 关键：不要加自定义 User-Agent。
+        // 威能网关对 UA 做了校验（Python 测试能通是因为 websockets 库
+        // 默认发自己的 UA）。这里必须用 URLSession 的缺省 UA，
+        // 加上官方 App 的 UA 反而会被 code 1001 踢掉。
+        log("请求头：仅 Authorization（无自定义 UA）")
 
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
+        // 不协商 permessage-deflate。实测部分网关在 iOS 协商到该扩展后
+        // 会在握手成功后立刻以 1001 关闭连接。
+        config.addValue("no", forHTTPHeaderField: "Sec-WebSocket-Extensions")
         let delegate = SessionDelegate()
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         self.session = session          // 强持有
@@ -163,6 +168,11 @@ final class MonitorClient: NSObject {
     /// 发订阅消息
     private func subscribe() {
         guard let device, let task else { return }
+        // 连接可能已经被服务端关闭，此时发送只会报 "Socket is not connected"
+        if task.state != .running {
+            log("⚠️ 连接非 running（state=\(task.state.rawValue)），跳过订阅")
+            return
+        }
         let message: [String: Any] = [
             "type": "msg",
             "productKey": device.productKey,
