@@ -478,12 +478,76 @@ struct RawDataView: View {
     }
 }
 
+// MARK: - 调试日志
+
+struct DebugLogView: View {
+    @EnvironmentObject var store: AppStore
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Card("构建信息", systemImage: "info.circle") {
+                        Text("版本 \(BuildInfo.version)")
+                            .font(.footnote.monospaced())
+                        Text("构建于 \(BuildInfo.timestamp)")
+                            .font(.footnote.monospaced())
+                        Text("设备 \(store.device?.id ?? "未选择")")
+                            .font(.footnote.monospaced())
+                        Text("mac \(store.device?.mac ?? "-")")
+                            .font(.footnote.monospaced())
+                    }
+
+                    Card("连接事件（\(store.monitor.log.count) 条）", systemImage: "list.bullet.rectangle") {
+                        if store.monitor.log.isEmpty {
+                            Text("暂无记录")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(Array(store.monitor.log.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(line.contains("❌") ? .red : .primary)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("调试")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("清空") { store.monitor.clearLog() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("重新连接") {
+                        store.monitor.clearLog()
+                        store.reconnect()
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum BuildInfo {
+    static let version = "3.1-ws-delegate"
+    /// CI 会用实际构建时间戳覆盖
+    static let timestamp = Bundle.main.object(forInfoDictionaryKey: "BuildTimestamp") as? String ?? "未注入"
+}
+
 // MARK: - 主界面
 
 struct DashboardView: View {
     @EnvironmentObject var store: AppStore
     @State private var showRaw = false
     @State private var showAccount = false
+    @State private var showDebug = false
 
     private var attrs: [String: Any] { store.monitor.attrs }
 
@@ -531,6 +595,13 @@ struct DashboardView: View {
                         Image(systemName: "person.crop.circle")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showDebug = true
+                    } label: {
+                        Image(systemName: "ladybug")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showRaw = true
@@ -538,6 +609,9 @@ struct DashboardView: View {
                         Image(systemName: "list.bullet.indent")
                     }
                 }
+            }
+            .sheet(isPresented: $showDebug) {
+                DebugLogView()
             }
             .sheet(isPresented: $showRaw) {
                 NavigationStack {

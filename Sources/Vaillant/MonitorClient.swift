@@ -43,6 +43,18 @@ final class MonitorClient: NSObject {
     /// 诊断信息：非预期消息的原文，排查连接问题时看这个
     @Published private(set) var diagnostic: String?
 
+    /// 完整事件日志，带时间戳。在调试页里显示。
+    @Published private(set) var log: [String] = []
+
+    private func log(_ text: String) {
+        let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        log.append("[\(ts)] \(text)")
+        if log.count > 200 { log.removeFirst(log.count - 200) }
+        print("[Monitor] \(text)")
+    }
+
+    func clearLog() { log.removeAll() }
+
     private let heartbeatInterval: TimeInterval = 15
 
     init(client: APIClient = APIClient()) {
@@ -84,11 +96,11 @@ final class MonitorClient: NSObject {
 
         state = retry == 0 ? .connecting : .reconnecting(attempt: retry)
         diagnostic = nil
+        log("开始连接 did=\(device.id) mac=\(device.mac) retry=\(retry)")
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token.prefix(12))…", forHTTPHeaderField: "Authorization")
         // 威能按 UA 区分客户端；缺省 UA 会被网关拒绝。
-        // 与集成源码保持一致，也与 Python 测试能连通的原因一致。
         request.setValue(Api.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(Api.appKey, forHTTPHeaderField: "appkey")
         request.timeoutInterval = 20
@@ -99,17 +111,22 @@ final class MonitorClient: NSObject {
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         self.session = session          // 强持有
         self.delegate = delegate
+        log("session 已创建 delegate=\(delegate)")
 
         delegate.onError = { [weak self] error in
             Task { @MainActor in
-                self?.state = .failed("握手失败：\(error.localizedDescription)")
-                self?.handleDisconnect()
+                guard let self else { return }
+                let ns = error as NSError
+                self.log("❌ delegate 错误 domain=\(ns.domain) code=\(ns.code) info=\(ns.userInfo)")
+                self.diagnostic = "\(ns.domain) \(ns.code)：\(error.localizedDescription)"
+                self.state = .failed("握手失败：\(error.localizedDescription)")
+                self.handleDisconnect()
             }
         }
-        delegate.onOpen = { [weak self] in
+        delegate.onOpen = { [weak self] protocolName in
             Task { @MainActor in
                 guard let self else { return }
-                // 握手完成，此时订阅才有效
+                self.log("✅ 握手完成 subprotocol=\(protocolName ?? "无")")
                 self.subscribe()
                 self.receiveNext()
                 self.cancelConnectTimeout()
@@ -119,6 +136,7 @@ final class MonitorClient: NSObject {
         let socket = session.webSocketTask(with: request)
         task = socket
         socket.resume()
+        log("task 已 resume")
 
         armConnectTimeout()
         startHeartbeat()
@@ -158,8 +176,11 @@ final class MonitorClient: NSObject {
         task.send(.string(text)) { [weak self] error in
             if let error {
                 Task { @MainActor in
+                    self?.log("❌ 订阅发送失败：\(error.localizedDescription)")
                     self?.state = .failed("订阅失败：\(error.localizedDescription)")
                 }
+            } else {
+                Task { @MainActor in self?.log("已发送订阅消息") }
             }
         }
     }
@@ -176,6 +197,8 @@ final class MonitorClient: NSObject {
 
                 case .failure(let error):
                     Task { @MainActor in
+                        let ns = error as NSError
+                        self.log("❌ receive 失败 domain=\(ns.domain) code=\(ns.code) \(error.localizedDescription)")
                         if self.state == .connecting {
                             self.state = .failed("连接失败：\(error.localizedDescription)")
                         }
@@ -207,6 +230,9 @@ final class MonitorClient: NSObject {
             // 订阅帧是全量，增量帧只含变化字段 —— 合并即可
             if let update = json["data"] as? [String: Any] {
                 attrs.merge(update) { _, new in new }
+                if lastUpdate == nil {
+                    log("收到全量属性帧，共 \(update.count) 个字段")
+                }
             }
             retry = 0
             isStale = false
@@ -289,7 +315,7 @@ final class MonitorClient: NSObject {
 /// URLSessionWebSocketTask 不会回报握手阶段的失败
 /// （TLS、HTTP Upgrade、认证），只有 delegate 能看到。
 final class SessionDelegate: NSObject, URLSessionWebSocketDelegate {
-    var onOpen: (() -> Void)?
+    var onOpen: ((String?) -> Void)?
     var onError: ((Error) -> Void)?
 
     func urlSession(
@@ -297,7 +323,7 @@ final class SessionDelegate: NSObject, URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
-        onOpen?()
+        onOpen?(protocol)
     }
 
     func urlSession(

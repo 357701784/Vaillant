@@ -26,6 +26,12 @@ jobs:
       - name: 确认 Xcode 版本
         run: xcodebuild -version
 
+      - name: 注入构建时间戳
+        run: |
+          TS=$(date -u '+%Y-%m-%d %H:%M UTC')
+          /usr/libexec/PlistBuddy -c "Set :BuildTimestamp $TS" Resources/Info.plist
+          echo "注入时间戳: $TS"
+
       - name: 编译（不签名）
         run: |
           xcodebuild \
