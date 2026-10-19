@@ -19,7 +19,9 @@ jobs:
         run: brew install xcodegen
 
       - name: 生成 Xcode 工程
-        run: xcodegen generate
+        run: |
+          xcodegen generate --spec project.yml 2>&1 | tee /tmp/xcodegen.log
+          test -d Vaillant.xcodeproj || { echo "::error::XcodeGen 未生成工程"; cat /tmp/xcodegen.log; exit 1; }
 
       - name: 确认 Xcode 版本
         run: xcodebuild -version
