@@ -52,6 +52,9 @@ enum Catalog {
         // 温度
         .init(key: "Flow_temperature", label: "出水温度", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "return_temperature", label: "回水温度", unit: "°C", style: .temperature, group: .temperature),
+        // 实测这台 familyCONNECT 推的字段（部分传感器装在网关侧）
+        .init(key: "DHW_temperature", label: "热水温度（实测）", unit: "°C", style: .temperature, group: .temperature),
+        .init(key: "CH_readSetPoint", label: "采暖读取设定", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Flow_Temperature_Setpoint", label: "出水设定温度", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "DHW_setpoint", label: "生活热水设定", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "DHW_readSetPoint", label: "生活热水读取设定", unit: "°C", style: .temperature, group: .temperature),
@@ -79,6 +82,8 @@ enum Catalog {
         .init(key: "Mode_Setting_CH", label: "采暖模式", unit: nil, style: .raw, group: .deviceState),
         .init(key: "Heating_System_Setting", label: "采暖系统设置", unit: nil, style: .raw, group: .deviceState),
         .init(key: "Heating_Curve", label: "采暖曲线", unit: nil, style: .raw, group: .deviceState),
+        .init(key: "DHW_switch", label: "热水开关", unit: nil, style: .status, group: .deviceState),
+        .init(key: "DHW_Function", label: "热水功能", unit: nil, style: .raw, group: .deviceState),
 
         // 燃气
         .init(key: "gas_ch_consumption_today", label: "采暖燃气（今日）", unit: nil, style: .counter, group: .gas),
@@ -173,8 +178,10 @@ enum Catalog {
     }
 
     /// 故障码列表里"没有故障"的常见占位值。
+    /// 65535 = 0xFFFF 是实测到的哨兵值，表示该位无故障。
     private static let noFaultValues: Set<String> = [
         "", "-", "--", "0", "0.0", "none", "null", "no fault", "ok",
+        "65535", "0xffff", "65534", "4294967295",
     ]
 
     static func isFault(_ spec: AttributeSpec, value: Any?) -> Bool? {

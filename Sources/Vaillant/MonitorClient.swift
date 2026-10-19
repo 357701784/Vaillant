@@ -23,10 +23,17 @@ final class MonitorClient: NSObject {
     @Published private(set) var lastUpdate: Date?
 
     private var task: URLSessionWebSocketTask?
+    /// 必须强持有 session。
+    /// 用 `URLSession(configuration:)` 现场创建却不保存，ARC 可能在
+    /// TLS 握手完成前就释放它 —— 表现为永远停在「连接中」，无任何回调。
+    private var session: URLSession?
+    /// 捕获握手阶段的错误。URLSessionWebSocketTask 自身不回报握手失败。
+    private var delegate: SessionDelegate?
     private let client: APIClient
     private var device: Device?
     private var token: String?
     private var pingTimer: Timer?
+    private var connectTimeout: Task<Void, Never>?
     private var retry = 0
     private var wantConnection = false
 
@@ -57,8 +64,7 @@ final class MonitorClient: NSObject {
     func disconnect() {
         wantConnection = false
         stopHeartbeat()
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
+        teardown()
         state = .idle
         isStale = true
     }
@@ -67,8 +73,7 @@ final class MonitorClient: NSObject {
     func invalidateToken() {
         wantConnection = false
         stopHeartbeat()
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
+        teardown()
         state = .failed("登录已过期")
     }
 
@@ -78,22 +83,64 @@ final class MonitorClient: NSObject {
         guard let device, let token, wantConnection else { return }
 
         state = retry == 0 ? .connecting : .reconnecting(attempt: retry)
+        diagnostic = nil
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // 威能按 UA 区分客户端；缺省 UA 会被网关拒绝。
+        // 与集成源码保持一致，也与 Python 测试能连通的原因一致。
+        request.setValue(Api.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Api.appKey, forHTTPHeaderField: "appkey")
+        request.timeoutInterval = 20
 
-        let socket = URLSession(configuration: .default)
-            .webSocketTask(with: request)
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = false
+        let delegate = SessionDelegate()
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        self.session = session          // 强持有
+        self.delegate = delegate
+
+        delegate.onError = { [weak self] error in
+            Task { @MainActor in
+                self?.state = .failed("握手失败：\(error.localizedDescription)")
+                self?.handleDisconnect()
+            }
+        }
+        delegate.onOpen = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                // 握手完成，此时订阅才有效
+                self.subscribe()
+                self.receiveNext()
+                self.cancelConnectTimeout()
+            }
+        }
+
+        let socket = session.webSocketTask(with: request)
         task = socket
         socket.resume()
 
-        // 订阅消息必须在握手完成后发。
-        // 提前 send 会被服务端丢弃 —— 表现为永远停在「连接中」。
-        // 先挂接收回调，等第一帧（哪怕是 pong）回来再订阅。
-        receiveNext(onReady: true)
-
+        armConnectTimeout()
         startHeartbeat()
     }
+
+    /// 握手迟迟不完成时给出明确失败，而不是无限期停在「连接中」
+    private func armConnectTimeout() {
+        connectTimeout?.cancel()
+        connectTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, !self.isLive else { return }
+            self.state = .failed("连接超时（20 秒未建立）")
+            self.handleDisconnect()
+        }
+    }
+
+    private func cancelConnectTimeout() {
+        connectTimeout?.cancel()
+        connectTimeout = nil
+    }
+
+    private var isLive: Bool { if case .live = state { return true }; return false }
 
     /// 发订阅消息
     private func subscribe() {
@@ -117,18 +164,13 @@ final class MonitorClient: NSObject {
         }
     }
 
-    private func receiveNext(onReady: Bool = false) {
+    private func receiveNext() {
         task?.receive { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 switch result {
                 case .success(let message):
-                    if onReady {
-                        // 实测：ping 的响应是 {"type":"3"}，
-                        // 订阅的响应是 {"type":"pong"}。
-                        // 任何一帧都说明握手已完成，此时订阅才有效。
-                        self.subscribe()
-                    }
+                    self.cancelConnectTimeout()
                     self.handle(message)
                     self.receiveNext()
 
@@ -188,6 +230,7 @@ final class MonitorClient: NSObject {
 
     private func handleDisconnect() {
         stopHeartbeat()
+        teardown()
         guard wantConnection else { return }
 
         // 指数退避，最多 5 分钟，和集成里的策略一致
@@ -228,5 +271,55 @@ final class MonitorClient: NSObject {
     private func stopHeartbeat() {
         pingTimer?.invalidate()
         pingTimer = nil
+    }
+
+    /// 释放 session 与 task，避免重连时堆积
+    private func teardown() {
+        cancelConnectTimeout()
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        session?.invalidateAndCancel()
+        session = nil
+        delegate = nil
+    }
+}
+
+// MARK: - 握手回调
+
+/// URLSessionWebSocketTask 不会回报握手阶段的失败
+/// （TLS、HTTP Upgrade、认证），只有 delegate 能看到。
+final class SessionDelegate: NSObject, URLSessionWebSocketDelegate {
+    var onOpen: (() -> Void)?
+    var onError: ((Error) -> Void)?
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        onOpen?()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        // 服务端主动关闭
+        if closeCode != .normalClosure {
+            onError?(NSError(
+                domain: "ws", code: Int(closeCode.rawValue),
+                userInfo: [NSLocalizedDescriptionKey: "服务端关闭（code \(closeCode.rawValue)）"]
+            ))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error { onError?(error) }
     }
 }
