@@ -53,7 +53,9 @@ final class MonitorClient: NSObject {
 
     func clearLog() { log.removeAll() }
 
-    private let heartbeatInterval: TimeInterval = 15
+    /// 心跳间隔。集成源码用 15 秒，但实测 iOS 端约 43 秒就被断开，
+    /// 说明服务端对空闲更敏感。收紧到 8 秒，并连接成功后立刻 ping 一次。
+    private let heartbeatInterval: TimeInterval = 8
 
     init(client: APIClient = APIClient()) {
         self.client = client
@@ -238,6 +240,14 @@ final class MonitorClient: NSObject {
 
                 case .failure(let error):
                     let ns = error as NSError
+                    // 还没连上就 receive 会立刻报 code=57（Socket is not connected），
+                    // 那只是握手未完成，不是断线。此时绝不能走 handleDisconnect，
+                    // 否则会把正在建立的连接自己拆掉（实测前几次 retry 全是这样死的）。
+                    if !self.isLive && self.attrs.isEmpty {
+                        self.log("⚠️ 握手阶段 receive 报错 code=\(ns.code)（忽略，交给连接超时处理）")
+                        self.state = .connecting
+                        return
+                    }
                     self.log("❌ receive 失败 code=\(ns.code) \(error.localizedDescription)")
                     self.handleDisconnect()
                 }
@@ -325,6 +335,8 @@ final class MonitorClient: NSObject {
         pingTimer = Timer.scheduledTimer(withTimeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.sendPing() }
         }
+        // 连上后立刻 ping 一次，避免服务端把我们当空闲连接
+        sendPing()
     }
 
     private func sendPing() {
