@@ -59,7 +59,8 @@ final class MonitorClient: NSObject, ObservableObject {
 
     // MARK: 日志
 
-    private func appendLog(_ text: String) {
+    /// 追加一条日志。AppStore 下发控制指令时也要写这里。
+    func appendLog(_ text: String) {
         let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         log.append("[\(ts)] \(text)")
         if log.count > 150 { log.removeFirst(log.count - 150) }
