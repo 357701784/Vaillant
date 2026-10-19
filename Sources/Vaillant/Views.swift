@@ -336,9 +336,18 @@ struct SetpointCard: View {
                 }
 
                 if !available {
-                    Text("该通道当前未启用，云端返回 0")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    // 这类机型的地暖不是「室温设定」控制，而是靠采暖曲线调节。
+                    // 室温设定恒为 0，不该显示成一个看起来能调的数字。
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("该机型用采暖曲线控制，无室温设定值")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if let curve = Catalog.number(attrs["Heating_Curve"]) {
+                            Text("当前采暖曲线：\(String(format: "%.2f", curve))")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }
@@ -583,6 +592,30 @@ struct DashboardView: View {
 
     private var attrs: [String: Any] { store.monitor.attrs }
 
+    /// 控制失败提示。指令常被云端静默忽略，没有提示用户会以为按钮坏了。
+    @ViewBuilder
+    private var errorToast: some View {
+        if let error = store.errorMessage {
+            VStack {
+                Spacer()
+                Text(error)
+                    .font(.footnote)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(.red, in: Capsule())
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .onAppear {
+                        Task {
+                            try? await Task.sleep(for: .seconds(4))
+                            store.errorMessage = nil
+                        }
+                    }
+            }
+            .animation(.easeInOut, value: store.errorMessage)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -639,6 +672,7 @@ struct DashboardView: View {
                 }
                 .padding(16)
             }
+            .overlay(alignment: .bottom) { errorToast }
             .background(Color(.systemGroupedBackground))
             .navigationTitle(store.device?.name ?? "威能")
             .navigationBarTitleDisplayMode(.inline)

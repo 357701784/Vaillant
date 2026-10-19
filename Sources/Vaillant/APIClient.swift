@@ -194,7 +194,8 @@ final class APIClient: NSObject {
     // MARK: 控制
 
     /// 下发控制指令。attrs 的可用键见 `WritableAttr`。
-    func control(device: Device, token: String, attrs: [String: Any]) async throws {
+    /// 返回云端的原始响应，方便排查指令为什么没生效。
+    func control(device: Device, token: String, attrs: [String: Any]) async throws -> [String: Any] {
         let request = makeRequest(
             path: "app/device/control/\(device.id)",
             method: "POST",
@@ -205,7 +206,7 @@ final class APIClient: NSObject {
                 "version": "1.0",
             ]
         )
-        _ = try await send(request)
+        return try await send(request)
     }
 }
 

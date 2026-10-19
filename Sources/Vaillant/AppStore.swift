@@ -130,13 +130,26 @@ final class AppStore: ObservableObject {
         sending = true
         defer { sending = false }
 
+        // 记录下发前后的关键值：控制指令常被云端静默忽略，
+        // 没有日志就无从判断是键名不对还是设备拒绝。
+        let keys = attrs.keys.joined(separator: ",")
+        monitor.log("下发指令 \(keys)")
+
         do {
-            try await api.control(device: device, token: token, attrs: attrs)
-            // 云端确认后属性会通过 WebSocket 推回来，这里不手动改本地状态
+            let response = try await api.control(device: device, token: token, attrs: attrs)
+            let code = response["code"] ?? "-"
+            let msg = response["msg"].map { "\($0)" } ?? ""
+            monitor.log("云端响应 code=\(code) \(msg)")
+            if let code as? Int, code != 200 {
+                errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(code)）" : msg
+            }
+            // 云端确认后属性会通过轮询推回来，这里不手动改本地状态
         } catch let e as ApiError where e.isTokenExpired {
             await reauthenticate()
         } catch {
-            errorMessage = (error as? ApiError)?.message ?? error.localizedDescription
+            let message = (error as? ApiError)?.message ?? error.localizedDescription
+            monitor.log("❌ 指令失败 \(message)")
+            errorMessage = message
         }
     }
 
