@@ -59,7 +59,7 @@ final class MonitorClient: NSObject, ObservableObject {
 
     // MARK: 日志
 
-    private func log(_ text: String) {
+    private func appendLog(_ text: String) {
         let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         log.append("[\(ts)] \(text)")
         if log.count > 150 { log.removeFirst(log.count - 150) }
@@ -75,7 +75,7 @@ final class MonitorClient: NSObject, ObservableObject {
         self.token = token
         wantConnection = true
         failureCount = 0
-        log("开始轮询，间隔 \(Int(pollInterval)) 秒")
+        appendLog("开始轮询，间隔 \(Int(pollInterval)) 秒")
         poll()
     }
 
@@ -165,7 +165,7 @@ final class MonitorClient: NSObject, ObservableObject {
                     state = .live
                     diagnostic = nil
                     failureCount = 0
-                    log("收到 \(update.count) 个字段")
+                    appendLog("收到 \(update.count) 个字段")
                     return
                 }
             } catch {
@@ -176,9 +176,9 @@ final class MonitorClient: NSObject, ObservableObject {
         // 没拿到数据
         failureCount += 1
         if failureCount == 1 {
-            log("第 1 次抓取未收到数据（code 57 多为握手未完成，稍后重试）")
+            appendLog("第 1 次抓取未收到数据（code 57 多为握手未完成，稍后重试）")
         } else {
-            log("第 \(failureCount) 次抓取失败")
+            appendLog("第 \(failureCount) 次抓取失败")
         }
         if attrs.isEmpty {
             state = failureCount >= 5

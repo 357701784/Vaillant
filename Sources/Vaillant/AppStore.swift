@@ -133,13 +133,13 @@ final class AppStore: ObservableObject {
         // 记录下发前后的关键值：控制指令常被云端静默忽略，
         // 没有日志就无从判断是键名不对还是设备拒绝。
         let keys = payload.keys.joined(separator: ",")
-        monitor.log("下发指令 \(keys)")
+        monitor.appendLog("下发指令 \(keys)")
 
         do {
             let response = try await api.control(device: device, token: token, attrs: payload)
             let code = response["code"].map { "\($0)" } ?? "-"
             let msg = response["msg"].map { "\($0)" } ?? ""
-            monitor.log("云端响应 code=\(code) \(msg)")
+            monitor.appendLog("云端响应 code=\(code) \(msg)")
             if let number = response["code"] as? Int, number != 200 {
                 errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(number)）" : msg
             }
@@ -148,7 +148,7 @@ final class AppStore: ObservableObject {
             await reauthenticate()
         } catch {
             let message = (error as? ApiError)?.message ?? error.localizedDescription
-            monitor.log("❌ 指令失败 \(message)")
+            monitor.appendLog("❌ 指令失败 \(message)")
             errorMessage = message
         }
     }
