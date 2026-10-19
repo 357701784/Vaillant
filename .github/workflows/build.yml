@@ -1,0 +1,52 @@
+name: Build IPA
+
+# 在 GitHub 的 macOS runner 上编译，你不需要自己有 Mac。
+# 产物是一个未签名的 .ipa，用 AltStore / SideStore 装到手机上。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        run: xcodegen generate
+
+      - name: 编译（不签名）
+        run: |
+          xcodebuild \
+            -project Vaillant.xcodeproj \
+            -scheme Vaillant \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            build
+
+      - name: 打包 .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Vaillant.app Payload/
+          zip -qry Vaillant.ipa Payload
+          rm -rf Payload
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vaillant-ipa
+          path: Vaillant.ipa
+          retention-days: 30
+
+# 注意：macOS runner 的免费额度对公开仓库每月 2000 分钟，私有仓库不计入免费额度。
+# 如果是私有仓库，macOS runner 会按分钟计费。用 Codemagic 免费额度可避开这点。
