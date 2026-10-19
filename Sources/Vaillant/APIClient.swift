@@ -213,10 +213,35 @@ final class APIClient: NSObject {
 
 /// 云端接受的控制键，逆自集成源码。
 enum WritableAttr {
+    // 地暖
     /// 开关：true/false，或 1/0
     static let heatingEnable = "Heating_Enable"
     /// 目标室温
     static let setpointComfort = "Room_Temperature_Setpoint_Comfort"
     /// 模式：开机为 "Cruising"
     static let modeCH = "Mode_Setting_CH"
+
+    // 生活热水
+    /// 生活热水设定温度（集成的 set_temperature 用的就是这个键）
+    static let dhwSetpoint = "DHW_setpoint"
+    /// 热水开关。集成写的是 WarmStar_Tank_Loading_Enable，值为 1/0
+    static let dhwEnable = "WarmStar_Tank_Loading_Enable"
+}
+
+/// 读取生活热水数据时的候选键，按优先级排列。
+/// 与集成 water_heater.py 的 DHW_SETPOINT_ATTRS / DHW_ENABLE_ATTRS 一致。
+enum ReadAttr {
+    static let dhwSetpointKeys = [
+        "Current_DHW_Setpoint", "DHW_readSetPoint", "DHW_setpoint",
+    ]
+    static let dhwEnableKeys = [
+        "WarmStar_Tank_Loading_Enable", "Enabled_DHW", "DHW_switch",
+    ]
+    static let heatingEnableKeys = ["Heating_Enable", "Enabled_Heating"]
+
+    /// 按优先级取第一个有值的键
+    static func first(_ keys: [String], in attrs: [String: Any]) -> Any? {
+        for key in keys where attrs[key] != nil { return attrs[key] }
+        return nil
+    }
 }

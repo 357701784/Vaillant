@@ -61,8 +61,6 @@ enum Catalog {
         .init(key: "Current_DHW_Setpoint", label: "当前生活热水设定", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Tank_temperature", label: "水箱温度", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Room_Temperature", label: "室温", unit: "°C", style: .temperature, group: .temperature),
-        .init(key: "Room_Temperature_Setpoint_Comfort", label: "舒适模式室温设定", unit: "°C", style: .temperature, group: .temperature),
-        .init(key: "Room_Temperature_Setpoint_ECO", label: "ECO 模式室温设定", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Outdoor_Temperature", label: "室外温度", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Lower_Limitation_of_CH_Setpoint", label: "采暖设定下限", unit: "°C", style: .temperature, group: .temperature),
         .init(key: "Upper_Limitation_of_CH_Setpoint", label: "采暖设定上限", unit: "°C", style: .temperature, group: .temperature),
@@ -133,6 +131,23 @@ enum Catalog {
     }
 
     // MARK: 取值与格式化
+
+    /// 传感器未接时威能返回的哨兵值。
+    /// -50°C 是常见的「无此传感器」标记，0 则多表示该通道未启用。
+    private static let sentinelTemps: Set<Double> = [-50, -51, -99, 127.5]
+
+    /// 温度是否是无意义的哨兵值
+    static func isSentinelTemperature(_ value: Double?) -> Bool {
+        guard let value else { return true }
+        return sentinelTemps.contains(value) || value <= -40 || value > 110
+    }
+
+    /// 温度取值：过滤哨兵值。
+    /// DHW_temperature 这类字段实测出现过 127.5 —— 超出物理范围，视为无效。
+    static func temperature(_ value: Any?) -> Double? {
+        let n = number(value)
+        return isSentinelTemperature(n) ? nil : n
+    }
 
     /// 从原始属性里取数值。
     ///
@@ -211,7 +226,14 @@ enum Catalog {
             if hours > 0 { return "\(hours) 小时 \(mins) 分" }
             return "\(mins) 分钟"
 
-        case .temperature, .pressure, .percent, .counter, .raw:
+        case .temperature:
+            // 温度单独走：过滤 -50 / 127.5 这类哨兵值
+            guard let n = temperature(value) else { return nil }
+            let text = String(format: "%.1f", n)
+            if let unit = spec.unit { return "\(text) \(unit)" }
+            return text
+
+        case .pressure, .percent, .counter, .raw:
             guard let n = number(value) else { return raw }
             let text: String
             var suffix = spec.unit ?? ""
@@ -223,9 +245,8 @@ enum Catalog {
                 suffix = suffix.isEmpty ? "m³" : suffix
             } else {
                 switch spec.style {
-                case .temperature: text = String(format: "%.1f", n)
-                case .pressure:    text = String(format: "%.2f", n)
-                default:           text = n == n.rounded() ? String(Int(n)) : String(format: "%.2f", n)
+                case .pressure: text = String(format: "%.2f", n)
+                default:        text = n == n.rounded() ? String(Int(n)) : String(format: "%.2f", n)
                 }
             }
             return suffix.isEmpty ? text : "\(text) \(suffix)"

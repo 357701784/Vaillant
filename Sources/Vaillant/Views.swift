@@ -261,31 +261,48 @@ struct ConnectionBanner: View {
     }
 }
 
-// MARK: - 温控
+// MARK: - 温度调节卡（地暖 / 生活热水共用）
 
-struct ThermostatCard: View {
+/// 设定温度调节器。地暖和生活热水的结构一样，只是字段、范围和开关键不同。
+struct SetpointCard: View {
     @EnvironmentObject var store: AppStore
+
+    let title: String
+    let icon: String
+    let setpointKeys: [String]
+    let enableKeys: [String]
+    /// 下发设定温度用的键
+    let writeSetpointKey: String
+    /// 下发开关用的键；nil 表示不提供开关
+    let writeEnableKey: String?
+    let onText: String
+    let offText: String
+    let minTemp: Double
+    let maxTemp: Double
+    let step: Double
     let attrs: [String: Any]
 
     private var setpoint: Double? {
-        Catalog.number(attrs[WritableAttr.setpointComfort])
+        ReadAttr.first(setpointKeys, in: attrs).flatMap { Catalog.number($0) }
     }
     private var enabled: Bool? {
-        Catalog.isOn(attrs[WritableAttr.heatingEnable])
-            ?? Catalog.isOn(attrs["Enabled_Heating"])
+        ReadAttr.first(enableKeys, in: attrs).flatMap { Catalog.isOn($0) }
     }
     private var busy: Bool { store.sending }
 
+    /// 该通道是否真的可用（网关会推 0 表示未启用）
+    private var available: Bool { (setpoint ?? 0) > 0 }
+
     var body: some View {
-        Card("温控", systemImage: "slider.horizontal.3") {
-            VStack(spacing: 18) {
+        Card(title, systemImage: icon) {
+            VStack(spacing: 16) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("目标室温")
+                    Text("目标温度")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(setpoint.map { String(format: "%.1f", $0) } ?? "—")
-                        .font(.system(size: 44, weight: .light, design: .rounded))
+                        .font(.system(size: 42, weight: .light, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
                     Text("°C")
@@ -293,34 +310,49 @@ struct ThermostatCard: View {
                         .foregroundStyle(.secondary)
                 }
 
-                HStack(spacing: 14) {
-                    stepButton("−", delta: -0.5, enabled: (setpoint ?? 0) > 10 && !busy)
-                    stepButton("+", delta: 0.5, enabled: (setpoint ?? 0) < 30 && !busy)
+                HStack(spacing: 12) {
+                    step("−", delta: -step)
+                    step("+", delta: step)
 
-                    Button {
-                        Task { await store.send([WritableAttr.heatingEnable: !(enabled ?? false)]) }
-                    } label: {
-                        Text((enabled ?? false) ? "关闭采暖" : "开启采暖")
-                            .font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .background(
-                                (enabled ?? false) ? Color.orange.opacity(0.16) : Color.green.opacity(0.16),
-                                in: RoundedRectangle(cornerRadius: 10)
-                            )
-                            .foregroundStyle((enabled ?? false) ? Color.orange : Color.green)
+                    if let key = writeEnableKey {
+                        Button {
+                            Task { await store.send([key: !(enabled ?? false) ? 1 : 0]) }
+                        } label: {
+                            Text((enabled ?? false) ? offText : onText)
+                                .font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    (enabled ?? false)
+                                        ? Color.orange.opacity(0.16)
+                                        : Color.green.opacity(0.16),
+                                    in: RoundedRectangle(cornerRadius: 10)
+                                )
+                                .foregroundStyle((enabled ?? false) ? Color.orange : Color.green)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
+                }
+
+                if !available {
+                    Text("该通道当前未启用，云端返回 0")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
     }
 
-    private func stepButton(_ title: String, delta: Double, enabled: Bool) -> some View {
-        Button {
-            guard let setpoint else { return }
-            Task { await store.send([WritableAttr.setpointComfort: setpoint + delta]) }
+    private func step(_ title: String, delta: Double) -> some View {
+        let usable = available && !busy
+            && (setpoint.map { $0 + delta >= minTemp && $0 + delta <= maxTemp } ?? false)
+
+        return Button {
+            guard let current = setpoint else { return }
+            Task {
+                await store.send([writeSetpointKey: (current + delta * 10).rounded() / 10])
+            }
         } label: {
             Text(title)
                 .font(.title2.weight(.medium))
@@ -328,8 +360,8 @@ struct ThermostatCard: View {
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.35)
+        .disabled(!usable)
+        .opacity(usable ? 1 : 0.35)
     }
 }
 
@@ -572,10 +604,33 @@ struct DashboardView: View {
                         )
                         .padding(.top, 60)
                     } else {
-                        ThermostatCard(attrs: attrs)
+                        SetpointCard(
+                            title: "生活热水",
+                            icon: "drop.fill",
+                            setpointKeys: ReadAttr.dhwSetpointKeys,
+                            enableKeys: ReadAttr.dhwEnableKeys,
+                            writeSetpointKey: WritableAttr.dhwSetpoint,
+                            writeEnableKey: WritableAttr.dhwEnable,
+                            onText: "开启热水",
+                            offText: "关闭热水",
+                            minTemp: 35, maxTemp: 65, step: 1,
+                            attrs: attrs
+                        )
+                        SetpointCard(
+                            title: "地暖",
+                            icon: "thermometer.medium",
+                            setpointKeys: [WritableAttr.setpointComfort],
+                            enableKeys: ReadAttr.heatingEnableKeys,
+                            writeSetpointKey: WritableAttr.setpointComfort,
+                            writeEnableKey: WritableAttr.heatingEnable,
+                            onText: "开启采暖",
+                            offText: "关闭采暖",
+                            minTemp: 10, maxTemp: 30, step: 0.5,
+                            attrs: attrs
+                        )
                         TemperatureCompareCard(
-                            flow: Catalog.number(attrs["Flow_temperature"]),
-                            ret: Catalog.number(attrs["return_temperature"])
+                            flow: Catalog.temperature(attrs["Flow_temperature"]),
+                            ret: Catalog.temperature(attrs["return_temperature"])
                         )
                         ForEach(AttributeSpec.Group.allCases) { group in
                             AttributeGroupView(group: group, attrs: attrs)
