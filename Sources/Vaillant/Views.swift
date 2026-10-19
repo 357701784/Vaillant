@@ -203,23 +203,34 @@ struct DeviceListView: View {
 struct ConnectionBanner: View {
     let state: MonitorClient.State
     let lastUpdate: Date?
+    let diagnostic: String?
     let onRetry: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(indicator)
-                .frame(width: 7, height: 7)
-            Text(message)
-                .font(.caption)
-            Spacer()
-            if case .failed = state {
-                Button("重试", action: onRetry)
-                    .font(.caption.weight(.semibold))
-            } else if let lastUpdate {
-                Text(lastUpdate, style: .time)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(indicator)
+                    .frame(width: 7, height: 7)
+                Text(message)
+                    .font(.caption)
+                Spacer()
+                if case .failed = state {
+                    Button("重试", action: onRetry)
+                        .font(.caption.weight(.semibold))
+                } else if let lastUpdate {
+                    Text(lastUpdate, style: .time)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            // 连不上时把服务端原话显示出来，省去反复猜测
+            if let diagnostic, state != .live {
+                Text(diagnostic)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
             }
         }
         .padding(.horizontal, 14)
@@ -482,7 +493,8 @@ struct DashboardView: View {
                 VStack(spacing: 12) {
                     ConnectionBanner(
                         state: store.monitor.state,
-                        lastUpdate: store.monitor.lastUpdate
+                        lastUpdate: store.monitor.lastUpdate,
+                        diagnostic: store.monitor.diagnostic
                     ) {
                         store.reconnect()
                     }

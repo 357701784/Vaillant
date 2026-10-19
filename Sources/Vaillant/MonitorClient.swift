@@ -33,6 +33,9 @@ final class MonitorClient: NSObject {
     /// 设备离线时属性不会更新，用它给界面一个信号。
     @Published private(set) var isStale: Bool = false
 
+    /// 诊断信息：非预期消息的原文，排查连接问题时看这个
+    @Published private(set) var diagnostic: String?
+
     private let heartbeatInterval: TimeInterval = 15
 
     init(client: APIClient = APIClient()) {
@@ -79,35 +82,60 @@ final class MonitorClient: NSObject {
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        let socket = URLSession.shared.webSocketTask(with: request)
+        let socket = URLSession(configuration: .default)
+            .webSocketTask(with: request)
         task = socket
         socket.resume()
 
-        let subscribe: [String: Any] = [
+        // 订阅消息必须在握手完成后发。
+        // 提前 send 会被服务端丢弃 —— 表现为永远停在「连接中」。
+        // 先挂接收回调，等第一帧（哪怕是 pong）回来再订阅。
+        receiveNext(onReady: true)
+
+        startHeartbeat()
+    }
+
+    /// 发订阅消息
+    private func subscribe() {
+        guard let device, let task else { return }
+        let message: [String: Any] = [
             "type": "msg",
             "productKey": device.productKey,
             "mac": device.mac,
             "did": device.id,
         ]
-        let payload = try? JSONSerialization.data(withJSONObject: subscribe)
-        if let payload, let text = String(data: payload, encoding: .utf8) {
-            socket.send(.string(text)) { _ in }
-        }
+        guard let payload = try? JSONSerialization.data(withJSONObject: message),
+              let text = String(data: payload, encoding: .utf8)
+        else { return }
 
-        startHeartbeat()
-        receiveNext()
+        task.send(.string(text)) { [weak self] error in
+            if let error {
+                Task { @MainActor in
+                    self?.state = .failed("订阅失败：\(error.localizedDescription)")
+                }
+            }
+        }
     }
 
-    private func receiveNext() {
+    private func receiveNext(onReady: Bool = false) {
         task?.receive { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 switch result {
                 case .success(let message):
+                    if onReady {
+                        // 收到第一帧说明握手已完成，此时订阅才有效
+                        self.subscribe()
+                    }
                     self.handle(message)
                     self.receiveNext()
 
-                case .failure:
+                case .failure(let error):
+                    Task { @MainActor in
+                        if self.state == .connecting {
+                            self.state = .failed("连接失败：\(error.localizedDescription)")
+                        }
+                    }
                     self.handleDisconnect()
                 }
             }
@@ -124,7 +152,11 @@ final class MonitorClient: NSObject {
 
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        else {
+            // 非 JSON 帧（例如服务端错误文本）也记下来，便于排查
+            diagnostic = "收到非 JSON 帧：\(text.prefix(120))"
+            return
+        }
 
         switch json["type"] as? String {
         case "2":
@@ -136,12 +168,14 @@ final class MonitorClient: NSObject {
             isStale = false
             lastUpdate = Date()
             state = .live
+            diagnostic = nil
 
         case "pong":
-            break // 心跳回应
+            diagnostic = diagnostic  // 心跳正常，不改状态
 
         default:
-            break
+            // 记录未知类型，避免静默失败导致界面永远停在「连接中」
+            diagnostic = "未知消息类型 \(json["type"].map { "\($0)" } ?? "nil")：\(text.prefix(120))"
         }
     }
 
@@ -171,13 +205,15 @@ final class MonitorClient: NSObject {
     private func startHeartbeat() {
         stopHeartbeat()
         pingTimer = Timer.scheduledTimer(withTimeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let task = self.task else { return }
-                task.send(.string(#"{"type":"ping"}"#)) { error in
-                    if error != nil {
-                        Task { @MainActor in self.handleDisconnect() }
-                    }
-                }
+            Task { @MainActor in self?.sendPing() }
+        }
+    }
+
+    private func sendPing() {
+        guard let task else { return }
+        task.send(.string(#"{"type":"ping"}"#)) { [weak self] error in
+            if error != nil {
+                Task { @MainActor in self?.handleDisconnect() }
             }
         }
     }
