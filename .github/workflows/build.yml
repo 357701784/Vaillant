@@ -28,7 +28,6 @@ jobs:
 
       - name: 编译（不签名）
         run: |
-          set -o pipefail
           xcodebuild \
             -project Vaillant.xcodeproj \
             -scheme Vaillant \
@@ -39,15 +38,16 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO \
-            build > /tmp/build.log 2>&1 || {
-              echo "### 编译失败，以下是错误行 ###"
-              grep -E "error:|error " /tmp/build.log | head -40 || true
-              echo "### 最后 40 行 ###"
-              tail -40 /tmp/build.log
-              exit 1
-            }
-          echo "编译成功"
-          grep -E "warning:" /tmp/build.log | head -20 || echo "无警告"
+            build > build.log 2>&1
+          echo $? > build.exitcode
+          # 把错误行单独挑出来，方便在 Actions 页面直接看到
+          {
+            echo "exit code: $(cat build.exitcode)"
+            grep -E "error:|error " build.log | head -50 || echo "(无 error 行)"
+            echo "--- 最后 30 行 ---"
+            tail -30 build.log
+          }
+          exit $(cat build.exitcode)
 
       - name: 打包 .ipa
         run: |
@@ -72,10 +72,13 @@ jobs:
           fi
 
       - name: 上传产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Vaillant-ipa
-          path: Vaillant.ipa
+          path: |
+            Vaillant.ipa
+            build.log
           retention-days: 30
 
 # 注意：macOS runner 的免费额度对公开仓库每月 2000 分钟，私有仓库不计入免费额度。
