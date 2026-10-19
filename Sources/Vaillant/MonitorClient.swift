@@ -70,7 +70,11 @@ final class MonitorClient: NSObject {
         self.token = token
         wantConnection = true
         retry = 0
-        open()
+        // 先验证 token，再开 WebSocket
+        Task { [weak self] in
+            await self?.verifyToken(token, device)
+            await MainActor.run { self?.open() }
+        }
     }
 
     func disconnect() {
@@ -91,6 +95,28 @@ final class MonitorClient: NSObject {
 
     // MARK: 连接
 
+    /// 连接前先验证 token 在 iOS 上确实能通过认证。
+    /// 如果连普通 HTTP 都 401/424，说明问题不在 WebSocket 路径。
+    private func verifyToken(_ token: String, _ device: Device) async {
+        log("token 长度=\(token.count) 前后各12位=[\(token.prefix(12))…\(token.suffix(12))]")
+        var req = URLRequest(url: URL(string:
+            "https://vicapi.vaillant.com.cn/app/device/getBindList?appKey=\(Api.appKey)&version=1.0"
+        )!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Api.appKey, forHTTPHeaderField: "appkey")
+        req.setValue(Api.userAgent, forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 15
+
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])??["code"] ?? nil
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            log("token 验证：HTTP \(status) 业务码 \(String(describing: code))")
+        } catch {
+            log("token 验证失败：\(error.localizedDescription)")
+        }
+    }
+
     private func open() {
         guard let device, let token, wantConnection else { return }
 
@@ -99,13 +125,9 @@ final class MonitorClient: NSObject {
         log("开始连接 did=\(device.id) mac=\(device.mac) retry=\(retry)")
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
-        request.setValue("Bearer \(token.prefix(12))…", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 20
-        // 关键：不要加自定义 User-Agent。
-        // 威能网关对 UA 做了校验（Python 测试能通是因为 websockets 库
-        // 默认发自己的 UA）。这里必须用 URLSession 的缺省 UA，
-        // 加上官方 App 的 UA 反而会被 code 1001 踢掉。
-        log("请求头：仅 Authorization（无自定义 UA）")
+        log("请求头：Authorization 完整长度 \(token.count)，无自定义 UA")
 
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
