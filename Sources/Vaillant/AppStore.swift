@@ -140,8 +140,8 @@ final class AppStore: ObservableObject {
             let code = response["code"] ?? "-"
             let msg = response["msg"].map { "\($0)" } ?? ""
             monitor.log("云端响应 code=\(code) \(msg)")
-            if let code as? Int, code != 200 {
-                errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(code)）" : msg
+            if let codeNumber = code as? Int, codeNumber != 200 {
+                errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(codeNumber)）" : msg
             }
             // 云端确认后属性会通过轮询推回来，这里不手动改本地状态
         } catch let e as ApiError where e.isTokenExpired {
