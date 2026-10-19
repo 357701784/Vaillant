@@ -28,6 +28,7 @@ jobs:
 
       - name: 编译（不签名）
         run: |
+          set -o pipefail
           xcodebuild \
             -project Vaillant.xcodeproj \
             -scheme Vaillant \
@@ -38,7 +39,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO \
-            build
+            build 2>&1 | tee /tmp/build.log | grep -E "error:|warning:|BUILD" || true
+          echo "---- 完整日志已存 /tmp/build.log ----"
+          tail -40 /tmp/build.log
 
       - name: 打包 .ipa
         run: |
