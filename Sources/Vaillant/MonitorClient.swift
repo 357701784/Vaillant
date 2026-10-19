@@ -23,12 +23,6 @@ final class MonitorClient: NSObject {
     @Published private(set) var lastUpdate: Date?
 
     private var task: URLSessionWebSocketTask?
-    /// 必须强持有 session。
-    /// 用 `URLSession(configuration:)` 现场创建却不保存，ARC 可能在
-    /// TLS 握手完成前就释放它 —— 表现为永远停在「连接中」，无任何回调。
-    private var session: URLSession?
-    /// 捕获握手阶段的错误。URLSessionWebSocketTask 自身不回报握手失败。
-    private var delegate: SessionDelegate?
     private let client: APIClient
     private var device: Device?
     private var token: String?
@@ -126,44 +120,46 @@ final class MonitorClient: NSObject {
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 20
-        log("请求头：Authorization 完整长度 \(token.count)，无自定义 UA")
+        log("用 URLSession.shared，无自定义 UA，Authorization 长度 \(token.count)")
 
-        let config = URLSessionConfiguration.default
-        config.waitsForConnectivity = false
-        let delegate = SessionDelegate()
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        self.session = session          // 强持有
-        self.delegate = delegate
-        log("session 已创建 delegate=\(delegate)")
-
-        delegate.onError = { [weak self] error in
-            Task { @MainActor in
-                guard let self else { return }
-                let ns = error as NSError
-                self.log("❌ delegate 错误 domain=\(ns.domain) code=\(ns.code) info=\(ns.userInfo)")
-                self.diagnostic = "\(ns.domain) \(ns.code)：\(error.localizedDescription)"
-                self.state = .failed("握手失败：\(error.localizedDescription)")
-                self.handleDisconnect()
-            }
-        }
-        delegate.onOpen = { [weak self] protocolName in
-            Task { @MainActor in
-                guard let self else { return }
-                self.log("✅ 握手完成 subprotocol=\(protocolName ?? "无")")
-                self.subscribe()
-                self.receiveNext()
-                self.cancelConnectTimeout()
-            }
-        }
-
-        let socket = session.webSocketTask(with: request)
+        // 必须用 .shared。
+        // 自建 URLSession(configuration:delegate:) 建立 WebSocket 时，
+        // 服务端会在握手后立刻以 code 1001 关闭 —— 早期版本用 .shared 能正常
+        // 收到 157 个字段，换成自建 session 就连不上了。
+        let socket = URLSession.shared.webSocketTask(with: request)
         task = socket
         socket.resume()
         log("task 已 resume")
 
+        // resume() 之后立即订阅。
+        // 早期能读到数据的版本就是这个时序：先发订阅，服务端随后回 pong 再推属性。
+        sendSubscribeNow()
+        receiveNext()
         armConnectTimeout()
         startHeartbeat()
+    }
+
+    /// 立即发送订阅，不等握手回调
+    private func sendSubscribeNow() {
+        guard let device, let task else { return }
+        let message: [String: Any] = [
+            "type": "msg",
+            "productKey": device.productKey,
+            "mac": device.mac,
+            "did": device.id,
+        ]
+        guard let payload = try? JSONSerialization.data(withJSONObject: message),
+              let text = String(data: payload, encoding: .utf8)
+        else { return }
+        task.send(.string(text)) { [weak self] error in
+            Task { @MainActor in
+                if let error {
+                    self?.log("❌ 订阅发送失败：\(error.localizedDescription)")
+                } else {
+                    self?.log("已发送订阅消息")
+                }
+            }
+        }
     }
 
     /// 握手迟迟不完成时给出明确失败，而不是无限期停在「连接中」
@@ -292,13 +288,15 @@ final class MonitorClient: NSObject {
         retry += 1
         isStale = true
 
-        if retry > 8 {
+        if retry > 6 {
             wantConnection = false
             state = .failed("连接断开，点此重试")
             return
         }
-        let delay = min(pow(2.0, Double(retry - 1)) * 2, 60)
+        // 指数退避：1s 2s 4s 8s 16s 32s。重连太密会把真正的错误淹掉。
+        let delay = min(pow(2.0, Double(retry - 1)), 60)
         state = .reconnecting(attempt: retry)
+        log("第 \(retry) 次重连将在 \(Int(delay)) 秒后进行")
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(delay))
             self.open()
@@ -328,54 +326,10 @@ final class MonitorClient: NSObject {
         pingTimer = nil
     }
 
-    /// 释放 session 与 task，避免重连时堆积
+    /// 释放 task，避免重连时堆积
     private func teardown() {
         cancelConnectTimeout()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        session?.invalidateAndCancel()
-        session = nil
-        delegate = nil
-    }
-}
-
-// MARK: - 握手回调
-
-/// URLSessionWebSocketTask 不会回报握手阶段的失败
-/// （TLS、HTTP Upgrade、认证），只有 delegate 能看到。
-final class SessionDelegate: NSObject, URLSessionWebSocketDelegate {
-    var onOpen: ((String?) -> Void)?
-    var onError: ((Error) -> Void)?
-
-    func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didOpenWithProtocol proto: String?
-    ) {
-        onOpen?(proto)
-    }
-
-
-    func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
-        reason: Data?
-    ) {
-        // 服务端主动关闭
-        if closeCode != .normalClosure {
-            onError?(NSError(
-                domain: "ws", code: Int(closeCode.rawValue),
-                userInfo: [NSLocalizedDescriptionKey: "服务端关闭（code \(closeCode.rawValue)）"]
-            ))
-        }
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didCompleteWithError error: Error?
-    ) {
-        if let error { onError?(error) }
     }
 }
