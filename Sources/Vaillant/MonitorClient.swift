@@ -5,9 +5,18 @@ import Foundation
 /// 协议逆自 vaillant_plus_cn_api/websocket.py：
 /// 1. `wss://vicapi.vaillant.com.cn/monitor/ws/app`，带 `Authorization: Bearer <token>`
 /// 2. 连上后发 `{"type":"msg","productKey":..,"mac":..,"did":..}` 订阅
-/// 3. 服务端推 `{"type":"2","did":..,"data":{...}}` —— 订阅后第一帧是全量属性，
-///    之后每帧只带变化的字段
-/// 4. 每 15 秒发 `{"type":"ping"}`，服务端回 `{"type":"pong"}`
+/// 3. 服务端推 `{"type":"2","did":..,"data":{...}}` —— 订阅后第一帧是全量属性
+/// 4. 每 15 秒发 `{"type":"ping"}`，服务端回 `{"type":"pong"}` 或 `{"type":"3"}`
+///
+/// **为什么是短连接轮询而不是长连接**
+///
+/// 维持长连接在 iOS 上极不稳定：实测约 43 秒就被服务端断开
+/// （code=53 Software caused connection abort）。但每次新建连接、订阅之后，
+/// 服务端**立刻**推送全量属性帧（实测 157 个字段）。
+///
+/// 既然每次都能拿到全量快照，就没必要维持长连接 —— 改成「开一条连接、
+/// 取一帧、断开」，按固定间隔轮询。这样没有心跳、没有掉线重连、
+/// 也没有重连风暴，行为可预期。
 @MainActor
 final class MonitorClient: NSObject {
     enum State: Equatable {
@@ -21,46 +30,41 @@ final class MonitorClient: NSObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var attrs: [String: Any] = [:]
     @Published private(set) var lastUpdate: Date?
+    @Published private(set) var diagnostic: String?
+    @Published private(set) var log: [String] = []
 
-    private var task: URLSessionWebSocketTask?
-    /// 连接代号。每次 open() 自增，用于识别「属于旧连接的延迟回调」。
-    private var generation = 0
-    /// 待执行的重连任务。新一轮连接开始前必须取消旧的。
-    private var reconnectTask: Task<Void, Never>?
     private let client: APIClient
     private var device: Device?
     private var token: String?
-    private var pingTimer: Timer?
-    private var connectTimeout: Task<Void, Never>?
-    private var retry = 0
+
+    /// 轮询定时器
+    private var pollTimer: Task<Void, Never>?
+    /// 当前正在进行的抓取，防止并发
+    private var inFlight = false
+    /// 界面回到前台时立刻刷新一次
     private var wantConnection = false
 
-    /// 设备离线时属性不会更新，用它给界面一个信号。
-    @Published private(set) var isStale: Bool = false
+    /// 轮询间隔。设备状态变化有分钟级延迟，10 秒足够且不浪费服务器资源。
+    private let pollInterval: TimeInterval = 10
+    /// 单次抓取超时
+    private let fetchTimeout: TimeInterval = 12
 
-    /// 诊断信息：非预期消息的原文，排查连接问题时看这个
-    @Published private(set) var diagnostic: String?
-
-    /// 完整事件日志，带时间戳。在调试页里显示。
-    @Published private(set) var log: [String] = []
-
-    private func log(_ text: String) {
-        let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        log.append("[\(ts)] \(text)")
-        if log.count > 200 { log.removeFirst(log.count - 200) }
-        print("[Monitor] \(text)")
-    }
-
-    func clearLog() { log.removeAll() }
-
-    /// 心跳间隔。集成源码用 15 秒，但实测 iOS 端约 43 秒就被断开，
-    /// 说明服务端对空闲更敏感。收紧到 8 秒，并连接成功后立刻 ping 一次。
-    private let heartbeatInterval: TimeInterval = 8
+    private var failureCount = 0
 
     init(client: APIClient = APIClient()) {
         self.client = client
         super.init()
     }
+
+    // MARK: 日志
+
+    private func log(_ text: String) {
+        let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        log.append("[\(ts)] \(text)")
+        if log.count > 150 { log.removeFirst(log.count - 150) }
+    }
+
+    func clearLog() { log.removeAll() }
 
     // MARK: 生命周期
 
@@ -69,135 +73,60 @@ final class MonitorClient: NSObject {
         self.device = device
         self.token = token
         wantConnection = true
-        retry = 0
-        // 先验证 token，再开 WebSocket
-        Task { [weak self] in
-            await self?.verifyToken(token, device)
-            await MainActor.run { self?.open() }
-        }
+        failureCount = 0
+        log("开始轮询，间隔 \(Int(pollInterval)) 秒")
+        poll()
     }
 
     func disconnect() {
         wantConnection = false
-        stopHeartbeat()
-        teardown()
+        pollTimer?.cancel()
+        pollTimer = nil
         state = .idle
-        isStale = true
+        attrs.removeAll()
+        lastUpdate = nil
     }
 
-    /// token 过期时外部调用，触发重连
+    /// token 过期时外部调用
     func invalidateToken() {
         wantConnection = false
-        stopHeartbeat()
-        teardown()
+        pollTimer?.cancel()
+        pollTimer = nil
         state = .failed("登录已过期")
     }
 
-    // MARK: 连接
+    // MARK: 轮询
 
-    /// 连接前先验证 token 在 iOS 上确实能通过认证。
-    /// 如果连普通 HTTP 都 401/424，说明问题不在 WebSocket 路径。
-    private func verifyToken(_ token: String, _ device: Device) async {
-        log("token 长度=\(token.count) 前后各12位=[\(token.prefix(12))…\(token.suffix(12))]")
-        var req = URLRequest(url: URL(string:
-            "https://vicapi.vaillant.com.cn/app/device/getBindList?appKey=\(Api.appKey)&version=1.0"
-        )!)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Api.appKey, forHTTPHeaderField: "appkey")
-        req.setValue(Api.userAgent, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
-
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])??["code"] ?? nil
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            log("token 验证：HTTP \(status) 业务码 \(String(describing: code))")
-        } catch {
-            log("token 验证失败：\(error.localizedDescription)")
+    private func poll() {
+        pollTimer?.cancel()
+        pollTimer = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await self?.fetchOnce()
+                guard let self, !Task.isCancelled, self.wantConnection else { return }
+                try? await Task.sleep(for: .seconds(self.pollInterval))
+            }
         }
     }
 
-    private func open() {
-        guard let device, let token, wantConnection else { return }
+    /// 开一条短连接，订阅，取一帧，断开
+    private func fetchOnce() async {
+        guard let device, let token, wantConnection, !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
 
-        state = retry == 0 ? .connecting : .reconnecting(attempt: retry)
-        diagnostic = nil
-        log("开始连接 did=\(device.id) mac=\(device.mac) retry=\(retry)")
+        if attrs.isEmpty {
+            state = failureCount > 0 ? .reconnecting(attempt: failureCount) : .connecting
+        }
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
+        request.timeoutInterval = fetchTimeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        // 新一轮连接：取消挂起的重连、递增代号，让旧回调失效
-        reconnectTask?.cancel()
-        reconnectTask = nil
-        generation += 1
-
-        log("用 URLSession.shared，无自定义 UA，Authorization 长度 \(token.count)")
-
-        // 必须用 .shared。
-        // 自建 URLSession(configuration:delegate:) 建立 WebSocket 时，
-        // 服务端会在握手后立刻以 code 1001 关闭。
         let socket = URLSession.shared.webSocketTask(with: request)
-        task = socket
         socket.resume()
-        log("task 已 resume")
+        defer { socket.cancel(with: .goingAway, reason: nil) }
 
-        // resume() 之后立即订阅（早期能读到 157 字段就是这个时序）
-        sendSubscribeNow()
-        receiveNext()
-        armConnectTimeout()
-        startHeartbeat()
-    }
-
-    /// 立即发送订阅，不等握手回调
-    private func sendSubscribeNow() {
-        guard let device, let task else { return }
-        let message: [String: Any] = [
-            "type": "msg",
-            "productKey": device.productKey,
-            "mac": device.mac,
-            "did": device.id,
-        ]
-        guard let payload = try? JSONSerialization.data(withJSONObject: message),
-              let text = String(data: payload, encoding: .utf8)
-        else { return }
-        task.send(.string(text)) { [weak self] error in
-            Task { @MainActor in
-                if let error {
-                    self?.log("❌ 订阅发送失败：\(error.localizedDescription)")
-                } else {
-                    self?.log("已发送订阅消息")
-                }
-            }
-        }
-    }
-
-    /// 握手迟迟不完成时给出明确失败，而不是无限期停在「连接中」
-    private func armConnectTimeout() {
-        connectTimeout?.cancel()
-        connectTimeout = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(20))
-            guard let self, !self.isLive else { return }
-            self.state = .failed("连接超时（20 秒未建立）")
-            self.handleDisconnect()
-        }
-    }
-
-    private func cancelConnectTimeout() {
-        connectTimeout?.cancel()
-        connectTimeout = nil
-    }
-
-    private var isLive: Bool { if case .live = state { return true }; return false }
-
-    /// 发订阅消息
-    private func subscribe() {
-        guard let device, let task else { return }
-        // 连接可能已经被服务端关闭，此时发送只会报 "Socket is not connected"
-        if task.state != .running {
-            log("⚠️ 连接非 running（state=\(task.state.rawValue)），跳过订阅")
-            return
-        }
+        // 订阅
         let message: [String: Any] = [
             "type": "msg",
             "productKey": device.productKey,
@@ -208,157 +137,60 @@ final class MonitorClient: NSObject {
               let text = String(data: payload, encoding: .utf8)
         else { return }
 
-        task.send(.string(text)) { [weak self] error in
-            if let error {
-                Task { @MainActor in
-                    self?.log("❌ 订阅发送失败：\(error.localizedDescription)")
-                    self?.state = .failed("订阅失败：\(error.localizedDescription)")
-                }
-            } else {
-                Task { @MainActor in self?.log("已发送订阅消息") }
-            }
-        }
-    }
+        // send 的回调与连接建立竞态，这里直接发，失败由下方取帧时暴露
+        socket.send(.string(text)) { _ in }
 
-    private func receiveNext() {
-        // 记住这是第几次连接发起的接收回调。
-        // 被取消的旧 socket 的回调会延迟到达，若不区分就会误杀新连接 ——
-        // 那会造成「重连风暴」：同一秒内叠起多个重连定时器。
-        let generation = self.generation
-        task?.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                guard generation == self.generation else {
-                    // 属于已被替换的旧连接，直接丢弃
+        // 取帧：最多等 fetchTimeout 秒
+        let deadline = Date().addingTimeInterval(fetchTimeout)
+        while Date() < deadline {
+            do {
+                let received = try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<URLSessionWebSocketTask.Message, Error>) in
+                    socket.receive { result in
+                        continuation.resume(with: result)
+                    }
+                }
+
+                guard let data = asText(received),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { continue }
+
+                if json["type"] as? String == "2",
+                   let update = json["data"] as? [String: Any],
+                   !update.isEmpty {
+                    // 每帧都是全量，直接替换
+                    attrs = update
+                    lastUpdate = Date()
+                    state = .live
+                    diagnostic = nil
+                    failureCount = 0
+                    log("收到 \(update.count) 个字段")
                     return
                 }
-                switch result {
-                case .success(let message):
-                    self.cancelConnectTimeout()
-                    self.handle(message)
-                    self.receiveNext()
-
-                case .failure(let error):
-                    let ns = error as NSError
-                    // 还没连上就 receive 会立刻报 code=57（Socket is not connected），
-                    // 那只是握手未完成，不是断线。此时绝不能走 handleDisconnect，
-                    // 否则会把正在建立的连接自己拆掉（实测前几次 retry 全是这样死的）。
-                    if !self.isLive && self.attrs.isEmpty {
-                        self.log("⚠️ 握手阶段 receive 报错 code=\(ns.code)（忽略，交给连接超时处理）")
-                        self.state = .connecting
-                        return
-                    }
-                    self.log("❌ receive 失败 code=\(ns.code) \(error.localizedDescription)")
-                    self.handleDisconnect()
-                }
+            } catch {
+                break
             }
+        }
+
+        // 没拿到数据
+        failureCount += 1
+        if failureCount == 1 {
+            log("第 1 次抓取未收到数据（code 57 多为握手未完成，稍后重试）")
+        } else {
+            log("第 \(failureCount) 次抓取失败")
+        }
+        if attrs.isEmpty {
+            state = failureCount >= 5
+                ? .failed("多次抓取失败，请检查网络")
+                : .reconnecting(attempt: failureCount)
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message) {
-        let text: String
+    private func asText(_ message: URLSessionWebSocketTask.Message) -> Data? {
         switch message {
-        case .string(let s): text = s
-        case .data(let d): text = String(data: d, encoding: .utf8) ?? ""
-        @unknown default: return
+        case .string(let s): return s.data(using: .utf8)
+        case .data(let d): return d
+        @unknown default: return nil
         }
-
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            // 非 JSON 帧（例如服务端错误文本）也记下来，便于排查
-            diagnostic = "收到非 JSON 帧：\(text.prefix(120))"
-            return
-        }
-
-        switch json["type"] as? String {
-        case "2":
-            // 订阅帧是全量，增量帧只含变化字段 —— 合并即可
-            if let update = json["data"] as? [String: Any] {
-                attrs.merge(update) { _, new in new }
-                if lastUpdate == nil {
-                    log("收到全量属性帧，共 \(update.count) 个字段")
-                }
-            }
-            retry = 0
-            isStale = false
-            lastUpdate = Date()
-            state = .live
-            diagnostic = nil
-
-        case "pong":
-            // 订阅确认。不改状态，等属性帧才置为 live
-            diagnostic = nil
-
-        case "3":
-            // ping 的响应。同样说明连接活着
-            diagnostic = nil
-
-        default:
-            // 记录未知类型，避免静默失败导致界面永远停在「连接中」
-            diagnostic = "未知消息类型 \(json["type"].map { "\($0)" } ?? "nil")：\(text.prefix(120))"
-        }
-    }
-
-    private func handleDisconnect() {
-        stopHeartbeat()
-        teardown()
-        guard wantConnection else { return }
-
-        retry += 1
-        isStale = true
-
-        if retry > 6 {
-            wantConnection = false
-            state = .failed("连接断开，点此重试")
-            return
-        }
-        // 指数退避：1s 2s 4s 8s 16s 32s
-        let delay = min(pow(2.0, Double(retry - 1)), 60)
-        state = .reconnecting(attempt: retry)
-        log("第 \(retry) 次重连将在 \(Int(delay)) 秒后进行")
-
-        // 关键：取消上一次排定的重连，否则多个定时器会同时触发，
-        // 互相把对方刚建立的连接拆掉。
-        reconnectTask?.cancel()
-        reconnectTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled else { return }
-            self?.open()
-        }
-    }
-
-    // MARK: 心跳
-
-    private func startHeartbeat() {
-        stopHeartbeat()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.sendPing() }
-        }
-        // 连上后立刻 ping 一次，避免服务端把我们当空闲连接
-        sendPing()
-    }
-
-    private func sendPing() {
-        guard let task else { return }
-        task.send(.string(#"{"type":"ping"}"#)) { [weak self] error in
-            if error != nil {
-                Task { @MainActor in self?.handleDisconnect() }
-            }
-        }
-    }
-
-    private func stopHeartbeat() {
-        pingTimer?.invalidate()
-        pingTimer = nil
-    }
-
-    /// 释放 task，避免重连时堆积
-    private func teardown() {
-        cancelConnectTimeout()
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        // 数据已经陈旧时不要继续显示，避免界面出现「有旧数据但显示未连接」的矛盾
-        if wantConnection == false { attrs.removeAll() }
     }
 }
