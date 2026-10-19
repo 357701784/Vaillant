@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// 威能云端实时通道。
 ///
@@ -18,7 +19,7 @@ import Foundation
 /// 取一帧、断开」，按固定间隔轮询。这样没有心跳、没有掉线重连、
 /// 也没有重连风暴，行为可预期。
 @MainActor
-final class MonitorClient: NSObject {
+final class MonitorClient: NSObject, ObservableObject {
     enum State: Equatable {
         case idle
         case connecting
