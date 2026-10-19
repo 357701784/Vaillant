@@ -109,9 +109,6 @@ final class MonitorClient: NSObject {
 
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
-        // 不协商 permessage-deflate。实测部分网关在 iOS 协商到该扩展后
-        // 会在握手成功后立刻以 1001 关闭连接。
-        config.addValue("no", forHTTPHeaderField: "Sec-WebSocket-Extensions")
         let delegate = SessionDelegate()
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         self.session = session          // 强持有
