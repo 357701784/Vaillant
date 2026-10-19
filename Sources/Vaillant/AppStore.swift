@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Security
+import Combine
 
 /// App 全局状态。
 ///
@@ -24,15 +25,28 @@ final class AppStore: ObservableObject {
     let monitor: MonitorClient
     private let api = APIClient()
     private var token: String?
+    /// 把 monitor 的变化转发出去。
+    /// MonitorClient 是独立的 ObservableObject，界面通过 @EnvironmentObject(store)
+    /// 观察 AppStore —— 两层之外的变化不会触发重绘，必须手动转发。
+    private var monitorObserver: AnyCancellable?
 
     init() {
         monitor = MonitorClient(client: api)
+
+        monitorObserver = monitor.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+
         if let saved = Keychain.readToken() {
             token = saved
             username = Keychain.readUsername()
             // 恢复 token 后直接取设备；失败会退回 .signedOut
             Task { await loadDevices() }
         }
+    }
+
+    deinit {
+        monitorObserver?.cancel()
     }
 
     var isSignedIn: Bool {
