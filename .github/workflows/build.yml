@@ -10,7 +10,8 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macos-15 自带 Xcode 16，能打开 XcodeGen 生成的工程（格式 77）
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +20,9 @@ jobs:
 
       - name: 生成 Xcode 工程
         run: xcodegen generate
+
+      - name: 确认 Xcode 版本
+        run: xcodebuild -version
 
       - name: 编译（不签名）
         run: |
