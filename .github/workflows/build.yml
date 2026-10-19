@@ -39,16 +39,37 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO \
-            build 2>&1 | tee /tmp/build.log | grep -E "error:|warning:|BUILD" || true
-          echo "---- 完整日志已存 /tmp/build.log ----"
-          tail -40 /tmp/build.log
+            build > /tmp/build.log 2>&1 || {
+              echo "### 编译失败，以下是错误行 ###"
+              grep -E "error:|error " /tmp/build.log | head -40 || true
+              echo "### 最后 40 行 ###"
+              tail -40 /tmp/build.log
+              exit 1
+            }
+          echo "编译成功"
+          grep -E "warning:" /tmp/build.log | head -20 || echo "无警告"
 
       - name: 打包 .ipa
         run: |
+          APP=build/Build/Products/Release-iphoneos/Vaillant.app
+          echo "### 查找产物 ###"
+          find build/Build/Products -maxdepth 2 -name "*.app" 2>/dev/null || echo "没有找到 .app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::未找到 $APP"
+            find build -maxdepth 4 -type d -name "*.app" 2>/dev/null | head
+            exit 1
+          fi
+          rm -rf Payload Vaillant.ipa
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/Vaillant.app Payload/
+          cp -R "$APP" Payload/
           zip -qry Vaillant.ipa Payload
           rm -rf Payload
+          SIZE=$(stat -f%z Vaillant.ipa)
+          echo "### ipa 大小: $SIZE 字节 ###"
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "::error::ipa 体积异常小（$SIZE 字节），打包有问题"
+            exit 1
+          fi
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
