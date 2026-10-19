@@ -263,7 +263,7 @@ struct ThermostatCard: View {
         Catalog.isOn(attrs[WritableAttr.heatingEnable])
             ?? Catalog.isOn(attrs["Enabled_Heating"])
     }
-    private var busy = store.sending
+    private var busy: Bool { store.sending }
 
     var body: some View {
         Card("温控", systemImage: "slider.horizontal.3") {

@@ -35,7 +35,10 @@ final class AppStore: ObservableObject {
         }
     }
 
-    var isSignedIn: Bool { phase != .signedOut }
+    var isSignedIn: Bool {
+        if case .signedOut = phase { return false }
+        return true
+    }
 
     // MARK: 登录
 

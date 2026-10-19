@@ -89,16 +89,16 @@ enum Catalog {
         .init(key: "gas_dhw_consumption_yearly", label: "热水燃气（今年）", unit: nil, style: .counter, group: .gas),
         .init(key: "gas_consumption", label: "燃气累计", unit: nil, style: .counter, group: .gas),
         .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .gas),
-        .init(key: "CH_power", label: "采暖功率", unit: null, style: .raw, group: .gas),
+        .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .gas),
         .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .gas),
 
         // 用水
         .init(key: "DHW_workTime", label: "热水运行时长", unit: "分钟", style: .duration, group: .water),
-        .init(key: "DHW_power", label: "热水功率", unit: null, style: .raw, group: .water),
+        .init(key: "DHW_power", label: "热水功率", unit: nil, style: .raw, group: .water),
         .init(key: "DHW_startTimes", label: "热水启动次数", unit: "次", style: .counter, group: .water),
 
         // 故障
-        .init(key: "maintainence_remainTime", label: "距下次保养", unit: null, style: .raw, group: .fault),
+        .init(key: "maintainence_remainTime", label: "距下次保养", unit: nil, style: .raw, group: .fault),
         .init(key: "Fault_List_1", label: "故障码 1", unit: nil, style: .raw, group: .fault),
         .init(key: "Fault_List_2", label: "故障码 2", unit: nil, style: .raw, group: .fault),
         .init(key: "Fault_List_3", label: "故障码 3", unit: nil, style: .raw, group: .fault),
