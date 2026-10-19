@@ -23,6 +23,10 @@ final class MonitorClient: NSObject {
     @Published private(set) var lastUpdate: Date?
 
     private var task: URLSessionWebSocketTask?
+    /// 连接代号。每次 open() 自增，用于识别「属于旧连接的延迟回调」。
+    private var generation = 0
+    /// 待执行的重连任务。新一轮连接开始前必须取消旧的。
+    private var reconnectTask: Task<Void, Never>?
     private let client: APIClient
     private var device: Device?
     private var token: String?
@@ -120,19 +124,23 @@ final class MonitorClient: NSObject {
 
         var request = URLRequest(url: URL(string: "wss://vicapi.vaillant.com.cn/monitor/ws/app")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        // 新一轮连接：取消挂起的重连、递增代号，让旧回调失效
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        generation += 1
+
         log("用 URLSession.shared，无自定义 UA，Authorization 长度 \(token.count)")
 
         // 必须用 .shared。
         // 自建 URLSession(configuration:delegate:) 建立 WebSocket 时，
-        // 服务端会在握手后立刻以 code 1001 关闭 —— 早期版本用 .shared 能正常
-        // 收到 157 个字段，换成自建 session 就连不上了。
+        // 服务端会在握手后立刻以 code 1001 关闭。
         let socket = URLSession.shared.webSocketTask(with: request)
         task = socket
         socket.resume()
         log("task 已 resume")
 
-        // resume() 之后立即订阅。
-        // 早期能读到数据的版本就是这个时序：先发订阅，服务端随后回 pong 再推属性。
+        // resume() 之后立即订阅（早期能读到 157 字段就是这个时序）
         sendSubscribeNow()
         receiveNext()
         armConnectTimeout()
@@ -211,9 +219,17 @@ final class MonitorClient: NSObject {
     }
 
     private func receiveNext() {
+        // 记住这是第几次连接发起的接收回调。
+        // 被取消的旧 socket 的回调会延迟到达，若不区分就会误杀新连接 ——
+        // 那会造成「重连风暴」：同一秒内叠起多个重连定时器。
+        let generation = self.generation
         task?.receive { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
+                guard generation == self.generation else {
+                    // 属于已被替换的旧连接，直接丢弃
+                    return
+                }
                 switch result {
                 case .success(let message):
                     self.cancelConnectTimeout()
@@ -221,13 +237,8 @@ final class MonitorClient: NSObject {
                     self.receiveNext()
 
                 case .failure(let error):
-                    Task { @MainActor in
-                        let ns = error as NSError
-                        self.log("❌ receive 失败 domain=\(ns.domain) code=\(ns.code) \(error.localizedDescription)")
-                        if self.state == .connecting {
-                            self.state = .failed("连接失败：\(error.localizedDescription)")
-                        }
-                    }
+                    let ns = error as NSError
+                    self.log("❌ receive 失败 code=\(ns.code) \(error.localizedDescription)")
                     self.handleDisconnect()
                 }
             }
@@ -284,7 +295,6 @@ final class MonitorClient: NSObject {
         teardown()
         guard wantConnection else { return }
 
-        // 指数退避，最多 5 分钟，和集成里的策略一致
         retry += 1
         isStale = true
 
@@ -293,13 +303,18 @@ final class MonitorClient: NSObject {
             state = .failed("连接断开，点此重试")
             return
         }
-        // 指数退避：1s 2s 4s 8s 16s 32s。重连太密会把真正的错误淹掉。
+        // 指数退避：1s 2s 4s 8s 16s 32s
         let delay = min(pow(2.0, Double(retry - 1)), 60)
         state = .reconnecting(attempt: retry)
         log("第 \(retry) 次重连将在 \(Int(delay)) 秒后进行")
-        Task { @MainActor in
+
+        // 关键：取消上一次排定的重连，否则多个定时器会同时触发，
+        // 互相把对方刚建立的连接拆掉。
+        reconnectTask?.cancel()
+        reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            self.open()
+            guard !Task.isCancelled else { return }
+            self?.open()
         }
     }
 
@@ -331,5 +346,7 @@ final class MonitorClient: NSObject {
         cancelConnectTimeout()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        // 数据已经陈旧时不要继续显示，避免界面出现「有旧数据但显示未连接」的矛盾
+        if wantConnection == false { attrs.removeAll() }
     }
 }
