@@ -20,13 +20,15 @@ struct AttributeSpec: Identifiable {
         case status            // 亮/灭类状态
     }
 
-    enum Group: String, CaseIterable {
+    enum Group: String, CaseIterable, Identifiable {
         case temperature = "温度"
         case deviceState = "运行状态"
         case gas = "燃气消耗"
         case water = "用水"
         case fault = "故障与维护"
         case system = "系统"
+
+        var id: String { rawValue }
 
         var icon: String {
             switch self {
