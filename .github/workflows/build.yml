@@ -29,8 +29,12 @@ jobs:
       - name: 注入构建时间戳
         run: |
           TS=$(date -u '+%Y-%m-%d %H:%M UTC')
-          /usr/libexec/PlistBuddy -c "Set :BuildTimestamp $TS" Resources/Info.plist
+          PB=/usr/libexec/PlistBuddy
+          # 键可能不存在（首次），Set 会失败；先删再用 Add
+          $PB -c "Delete :BuildTimestamp" Resources/Info.plist 2>/dev/null || true
+          $PB -c "Add :BuildTimestamp string $TS" Resources/Info.plist
           echo "注入时间戳: $TS"
+          $PB -c "Print :BuildTimestamp" Resources/Info.plist
 
       - name: 编译（不签名）
         run: |
