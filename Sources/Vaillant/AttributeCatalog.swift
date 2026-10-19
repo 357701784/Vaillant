@@ -90,6 +90,10 @@ enum Catalog {
         .init(key: "gas_dhw_consumption_monthly", label: "热水燃气（本月）", unit: nil, style: .counter, group: .gas),
         .init(key: "gas_dhw_consumption_yearly", label: "热水燃气（今年）", unit: nil, style: .counter, group: .gas),
         .init(key: "gas_consumption", label: "燃气累计", unit: nil, style: .counter, group: .gas),
+        // 实测这台 familyCONNECT 实际推的字段名（与集成源码里的 key 不同）
+        .init(key: "gasDHWToday", label: "热水燃气（今日·实测）", unit: nil, style: .counter, group: .gas),
+        .init(key: "gasCHToday", label: "采暖燃气（今日·实测）", unit: nil, style: .counter, group: .gas),
+        .init(key: "Mode_Setting_DHW", label: "热水模式", unit: nil, style: .raw, group: .deviceState),
         .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .gas),
         .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .gas),
         .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .gas),
@@ -125,13 +129,29 @@ enum Catalog {
 
     // MARK: 取值与格式化
 
-    /// 从原始属性里取数值，兼容 Int / Double / String。
+    /// 从原始属性里取数值。
+    ///
+    /// 实测云端的值有四种形态，都遇到过：
+    ///   - `35`        JSON 数字
+    ///   - `0`         JSON 数字
+    ///   - `"000080bf"` 十六进制字符串（燃气消耗等累计量）
+    ///   - `"42"`      十进制字符串
     static func number(_ value: Any?) -> Double? {
         switch value {
         case let n as Double: return n
         case let n as Int: return Double(n)
         case let n as NSNumber: return n.doubleValue
-        case let s as String: return Double(s)
+        case let s as String:
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if let direct = Double(t) { return direct }
+            // 十六进制：纯数字+字母、或有 0x 前缀
+            if t.hasPrefix("0x") || t.hasPrefix("0X") {
+                return UInt64(t.dropFirst(2), radix: 16).map { Double($0) }
+            }
+            if !t.isEmpty, t.allSatisfy({ $0.isHexDigit }) {
+                return UInt64(t, radix: 16).map { Double($0) }
+            }
+            return nil
         default: return nil
         }
     }
@@ -187,13 +207,30 @@ enum Catalog {
         case .temperature, .pressure, .percent, .counter, .raw:
             guard let n = number(value) else { return raw }
             let text: String
-            switch spec.style {
-            case .temperature: text = String(format: "%.1f", n)
-            case .pressure:    text = String(format: "%.2f", n)
-            default:           text = n == n.rounded() ? String(Int(n)) : String(format: "%.2f", n)
+            var suffix = spec.unit ?? ""
+
+            if spec.group == .gas && isHexString(raw) {
+                // 燃气累计量用十六进制定点格式，低三位是小数：
+                // "000080bf" = 32991 → 32.991 m³
+                text = String(format: "%.3f", n / 1000)
+                suffix = suffix.isEmpty ? "m³" : suffix
+            } else {
+                switch spec.style {
+                case .temperature: text = String(format: "%.1f", n)
+                case .pressure:    text = String(format: "%.2f", n)
+                default:           text = n == n.rounded() ? String(Int(n)) : String(format: "%.2f", n)
+                }
             }
-            if let unit = spec.unit { return "\(text) \(unit)" }
-            return text
+            return suffix.isEmpty ? text : "\(text) \(suffix)"
         }
+    }
+
+    /// 原始值是否为十六进制字符串
+    private static func isHexString(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !t.isEmpty, !t.hasPrefix("0x") else { return false }
+        // 纯十进制数字不算
+        if t.allSatisfy(\.isNumber) { return false }
+        return t.allSatisfy(\.isHexDigit)
     }
 }

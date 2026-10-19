@@ -124,7 +124,9 @@ final class MonitorClient: NSObject {
                 switch result {
                 case .success(let message):
                     if onReady {
-                        // 收到第一帧说明握手已完成，此时订阅才有效
+                        // 实测：ping 的响应是 {"type":"3"}，
+                        // 订阅的响应是 {"type":"pong"}。
+                        // 任何一帧都说明握手已完成，此时订阅才有效。
                         self.subscribe()
                     }
                     self.handle(message)
@@ -171,7 +173,12 @@ final class MonitorClient: NSObject {
             diagnostic = nil
 
         case "pong":
-            diagnostic = diagnostic  // 心跳正常，不改状态
+            // 订阅确认。不改状态，等属性帧才置为 live
+            diagnostic = nil
+
+        case "3":
+            // ping 的响应。同样说明连接活着
+            diagnostic = nil
 
         default:
             // 记录未知类型，避免静默失败导致界面永远停在「连接中」
