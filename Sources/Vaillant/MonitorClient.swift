@@ -321,10 +321,11 @@ final class SessionDelegate: NSObject, URLSessionWebSocketDelegate {
     func urlSession(
         _ session: URLSession,
         webSocketTask: URLSessionWebSocketTask,
-        didOpenWithProtocol protocol: String?
+        didOpenWithProtocol proto: String?
     ) {
-        onOpen?(protocol)
+        onOpen?(proto)
     }
+
 
     func urlSession(
         _ session: URLSession,
