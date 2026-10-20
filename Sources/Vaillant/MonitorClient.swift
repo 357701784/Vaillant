@@ -45,8 +45,12 @@ final class MonitorClient: NSObject, ObservableObject {
     /// 界面回到前台时立刻刷新一次
     private var wantConnection = false
 
-    /// 轮询间隔。设备状态变化有分钟级延迟，10 秒足够且不浪费服务器资源。
-    private let pollInterval: TimeInterval = 10
+    /// 轮询间隔。设备状态变化有分钟级延迟，5 秒已足够灵敏。
+    ///
+    /// 每次轮询都要新建一条 WebSocket 连接到威能云，所以不宜再短。
+    /// 即便撞上「设备尚未应用新设定」的窗口，applyRemote 也会
+    /// 保护本地已设的值，不会让界面回跳。
+    private let pollInterval: TimeInterval = 5
     /// 单次抓取超时
     private let fetchTimeout: TimeInterval = 12
 
