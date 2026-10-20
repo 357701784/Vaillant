@@ -128,8 +128,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var sending = false
     /// 等待发送的指令。连续按压时只保留最新值。
     private var pendingPayload: [String: Any] = [:]
-    /// 是否有指令正在飞行中
-    private var sendInFlight = false
+    /// 驱动发送队列的任务
+    private var sendTask: Task<Void, Never>?
 
     /// 按下 +/− 时调用。
     ///
@@ -152,18 +152,18 @@ final class AppStore: ObservableObject {
         // 夹在设备允许的范围内，超范围同样会被云端拒绝
         let clamped = min(upper, max(lower, next))
 
-        // 同步写入本地状态：界面立刻更新，且下一次按压能读到它
-        monitor.applyLocal([key: clamped])
-        Task { await send([key: clamped]) }
+        // send() 内部会同步写入本地状态（乐观更新），
+        // 所以下一次按压能读到它 —— 累加才不会丢步。
+        send([key: clamped])
     }
 
     /// 下发控制指令。
     ///
-    /// 连续快速按压时不能丢弃后发的指令 —— 用户按 5 次 + 应该得到 +5，
-    /// 而不是 +1。所以这里合并待发指令：飞行期间的新指令覆盖旧的，
-    /// 当前这条发完后立刻把合并后的值发出去。
-    func send(_ payload: [String: Any]) async {
-        guard let device, let token else { return }
+    /// 连续快速按压时不能丢弃后发的指令 —— 用户按 7 次 + 应该得到 +7。
+    /// 这里用一个常驻的「泵」任务驱动队列：
+    /// 飞行期间的新指令合并进 pendingPayload，泵取走时只发最新值。
+    func send(_ payload: [String: Any]) {
+        guard device != nil, token != nil else { return }
 
         // 立即乐观更新：界面马上反映操作，也让后续按压基于新值计算。
         monitor.applyLocal(payload)
@@ -171,46 +171,74 @@ final class AppStore: ObservableObject {
         // 合并待发指令（后来的覆盖先前的）
         pendingPayload.merge(payload) { _, new in new }
 
-        // 已有指令在飞：等它完成后由下面的循环统一处理
-        guard !sendInFlight else { return }
-        sendInFlight = true
-        sending = true
-        defer {
-            sendInFlight = false
-            sending = false
-        }
-
-        while !pendingPayload.isEmpty {
-            let batch = pendingPayload
-            pendingPayload = [:]
-
-            let keys = batch.keys.joined(separator: ",")
-            let values = batch.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
-            monitor.appendLog("下发指令 \(keys) → \(values)")
-
-            do {
-                let response = try await api.control(device: device, token: token, attrs: batch)
-                let code = response["code"].map { "\($0)" } ?? "-"
-                let msg = response["msg"].map { "\($0)" } ?? ""
-                monitor.appendLog("云端响应 code=\(code) \(msg)")
-                if let number = response["code"] as? Int, number != 200 {
-                    errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(number)）" : msg
-                }
-            } catch let e as ApiError where e.isTokenExpired {
-                await reauthenticate()
-            } catch {
-                let message = (error as? ApiError)?.message ?? error.localizedDescription
-                monitor.appendLog("❌ 指令失败 \(message)")
-                errorMessage = message
+        // 没有泵在跑就启动一个。已有泵在跑时，新指令留在队列里等它取。
+        if sendTask == nil {
+            sending = true
+            sendTask = Task { [weak self] in
+                await self?.pumpQueue()
             }
         }
+    }
 
-        // 队列排空后再核对一次。
-        // 云端接受指令后设备需要几秒才实际应用并上报，立刻拉取会读到旧值。
-        // 注意这里在循环【之外】—— 放在循环里会让每条指令都等 3 秒，
-        // 连续按压时指令被拉得很开，体感像卡顿。
-        try? await Task.sleep(for: .seconds(3))
-        await monitor.refreshNow()
+    /// 发送队列泵。
+    ///
+    /// 之前用 `defer { sendInFlight = false }` 来标记空闲，但 defer 要等
+    /// 函数【退出】才执行 —— 而退出前还有 3 秒的核对等待。那 3 秒里
+    /// 新按压会被 `guard !sendInFlight` 挡掉，值卡在队列里没人取，
+    /// 于是「按了没反应」。改成常驻任务后，等待期间的新指令会
+    /// 被外层循环接住。
+    private func pumpQueue() async {
+        while true {
+            // 把队列里所有待发指令发出去
+            while !pendingPayload.isEmpty {
+                let batch = pendingPayload
+                pendingPayload = [:]
+
+                guard let device, let token else { break }
+
+                let keys = batch.keys.joined(separator: ",")
+                let values = batch.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+                monitor.appendLog("下发指令 \(keys) → \(values)")
+
+                do {
+                    let response = try await api.control(
+                        device: device, token: token, attrs: batch
+                    )
+                    let code = response["code"].map { "\($0)" } ?? "-"
+                    let msg = response["msg"].map { "\($0)" } ?? ""
+                    monitor.appendLog("云端响应 code=\(code) \(msg)")
+                    if let number = response["code"] as? Int, number != 200 {
+                        errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(number)）" : msg
+                    }
+                } catch let e as ApiError where e.isTokenExpired {
+                    await reauthenticate()
+                } catch {
+                    let message = (error as? ApiError)?.message ?? error.localizedDescription
+                    monitor.appendLog("❌ 指令失败 \(message)")
+                    errorMessage = message
+                }
+            }
+
+            // 队列空 → 等设备把改动应用并上报，再核对一次。
+            // 分段等待：期间若有新按压，立刻结束等待去发它，
+            // 而不是干等满 3 秒。
+            var waited = 0.0
+            while waited < 3.0 {
+                try? await Task.sleep(for: .milliseconds(300))
+                waited += 0.3
+                if !pendingPayload.isEmpty { break }
+            }
+            await monitor.refreshNow()
+
+            // 核对期间若又攒了新指令，回到上面继续发。
+            // 这个检查与下面的 sendTask = nil 之间没有 await，
+            // 在主线程上不会被打断，所以不会漏掉按压。
+            if pendingPayload.isEmpty {
+                sendTask = nil
+                sending = false
+                return
+            }
+        }
     }
 
     /// token 过期：用 Keychain 里的密码静默重登一次。

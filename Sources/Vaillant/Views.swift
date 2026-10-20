@@ -342,7 +342,7 @@ struct SetpointCard: View {
 
                     if let key = writeEnableKey {
                         Button {
-                            Task { await store.send([key: !(enabled ?? false) ? 1 : 0]) }
+                            store.send([key: (enabled ?? false) ? 0 : 1])
                         } label: {
                             Text((enabled ?? false) ? offText : onText)
                                 .font(.subheadline.weight(.medium))
