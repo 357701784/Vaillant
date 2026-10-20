@@ -662,8 +662,8 @@ struct DashboardView: View {
                             writeEnableKey: WritableAttr.dhwEnable,
                             onText: "开启热水",
                             offText: "关闭热水",
-                            step: 1,
                             fallbackMin: 35, fallbackMax: 65,
+                            step: 1,
                             attrs: attrs
                         )
                         SetpointCard(
@@ -674,8 +674,8 @@ struct DashboardView: View {
                             writeSetpointKey: WritableAttr.setpointComfort,
                             writeEnableKey: WritableAttr.heatingEnable,
                             onText: "开启采暖",
-                            step: 0.5,
                             fallbackMin: 10, fallbackMax: 30,
+                            step: 0.5,
                             attrs: attrs
                         )
                         TemperatureCompareCard(
