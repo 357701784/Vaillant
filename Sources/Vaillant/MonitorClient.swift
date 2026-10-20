@@ -110,14 +110,73 @@ final class MonitorClient: NSObject, ObservableObject {
         }
     }
 
+    /// 本地乐观设置、尚未被设备确认的值。
+    ///
+    /// 设备应用新设定有延迟：云端已接受指令，但设备实际改到位要几秒。
+    /// 这期间轮询读到的还是设备的旧值，若直接采用，界面就会从
+    /// 刚设的 45 跳回 44.5。这里记下待确认的值，在设备确认前
+    /// 保护它不被旧值覆盖。
+    private var pendingLocal: [String: Any] = [:]
+    /// 各待确认值的写入时间。超过保护期就放弃保护（设备可能改了别的值）。
+    private var pendingSince: [String: Date] = [:]
+    /// 待确认值的保护时长
+    private let pendingTTL: TimeInterval = 90
+
     /// 乐观更新：控制指令下发后立即改本地值。
     ///
     /// 轮询间隔 10 秒，若等下一轮才更新，用户会觉得按钮没反应。
     /// 这里先把值改掉让界面立刻反馈，随后由轮询核对真实值。
     func applyLocal(_ updates: [String: Any]) {
         guard !updates.isEmpty else { return }
-        for (key, value) in updates { attrs[key] = value }
+        let now = Date()
+        for (key, value) in updates {
+            attrs[key] = value
+            pendingLocal[key] = value
+            pendingSince[key] = now
+        }
         appendLog("本地已更新：\(updates.map { "\($0.key)=\($0.value)" }.joined(separator: " "))")
+    }
+
+    /// 合并云端推来的数据。
+    ///
+    /// 对「本地已设但设备尚未确认」的值保持本地值不变，
+    /// 直到设备回报的值与之一致（确认生效）才解除保护。
+    private func applyRemote(_ incoming: [String: Any]) {
+        // 参数不可变，先复制一份再改
+        var update = incoming
+        let now = Date()
+
+        for (key, localValue) in pendingLocal {
+            // 超过保护期：设备可能压根不接受这个值，放弃保护
+            if let since = pendingSince[key], now.timeIntervalSince(since) > pendingTTL {
+                pendingLocal.removeValue(forKey: key)
+                pendingSince.removeValue(forKey: key)
+                continue
+            }
+            guard let remote = update[key] else { continue }
+            if sameValue(remote, localValue) {
+                // 设备确认了
+                pendingLocal.removeValue(forKey: key)
+                pendingSince.removeValue(forKey: key)
+            }
+        }
+
+        // 未确认的本地值优先，设备的旧值不覆盖它
+        for (key, localValue) in pendingLocal {
+            if let remote = update[key], !sameValue(remote, localValue) {
+                update[key] = localValue
+            }
+        }
+
+        for (key, value) in update { attrs[key] = value }
+    }
+
+    /// 比较两个值是否等价（数值按数值比，其余按字符串比）
+    private func sameValue(_ a: Any, _ b: Any) -> Bool {
+        if let x = Catalog.number(a), let y = Catalog.number(b) {
+            return abs(x - y) < 0.01
+        }
+        return String(describing: a) == String(describing: b)
     }
 
     /// 立刻拉一次数据，不等轮询
@@ -179,11 +238,7 @@ final class MonitorClient: NSObject, ObservableObject {
                     // 之后可能只带变化的字段。整体替换会把其余字段全丢掉，
                     // 界面就变成一片空白。必须合并。
                     let isFull = update.count > 50
-                    if isFull {
-                        attrs = update
-                    } else {
-                        for (key, value) in update { attrs[key] = value }
-                    }
+                    applyRemote(update)
                     lastUpdate = Date()
                     state = .live
                     diagnostic = nil
