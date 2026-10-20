@@ -375,8 +375,14 @@ struct SetpointCard: View {
 
         return Button {
             guard let current = setpoint else { return }
+            // 保留一位小数：((current + delta) * 10).rounded() / 10
+            // 括号位置很关键 —— 写成 (current + delta * 10) 等于 current/10 + delta，
+            // 会把 43 变成 5.3，远低于下限 35，云端直接返回 500。
+            let next = ((current + delta) * 10).rounded() / 10
+            // 夹在设备允许的范围内，超范围同样会被云端拒绝
+            let clamped = min(maxTemp, max(minTemp, next))
             Task {
-                await store.send([writeSetpointKey: (current + delta * 10).rounded() / 10])
+                await store.send([writeSetpointKey: clamped])
             }
         } label: {
             Text(title)

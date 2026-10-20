@@ -133,7 +133,8 @@ final class AppStore: ObservableObject {
         // 记录下发前后的关键值：控制指令常被云端静默忽略，
         // 没有日志就无从判断是键名不对还是设备拒绝。
         let keys = payload.keys.joined(separator: ",")
-        monitor.appendLog("下发指令 \(keys)")
+        let values = payload.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        monitor.appendLog("下发指令 \(keys) → \(values)")
 
         do {
             let response = try await api.control(device: device, token: token, attrs: payload)
