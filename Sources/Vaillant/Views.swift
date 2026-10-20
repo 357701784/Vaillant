@@ -299,15 +299,11 @@ struct SetpointCard: View {
     }
     private var busy: Bool { store.sending }
 
-    /// 待生效的目标值。
+    /// 界面显示的值。
     ///
-    /// 指令下发后到设备回报之间有延迟（轮询 10 秒）。用这个状态记住
-    /// 用户连续按压累积出来的目标值，让每次按压都基于最新的值计算，
-    /// 而不是等云端回报。
-    @State private var pendingValue: Double?
-
-    /// 界面显示的值：有待生效值时优先显示它
-    private var displayValue: Double? { pendingValue ?? setpoint }
+    /// 直接用 setpoint —— 它来自 monitor.attrs，而乐观更新是同步写入的，
+    /// 所以连按多次时每次都能看到最新的累计值。
+    private var displayValue: Double? { setpoint }
 
     /// 该通道是否真的可用（网关会推 0 表示未启用）
     private var available: Bool { (setpoint ?? 0) > 0 }
@@ -377,12 +373,6 @@ struct SetpointCard: View {
                     }
                 }
             }
-            .onChange(of: setpoint) { _, new in
-                // 云端回报的值与待生效值一致，说明已生效，清掉待生效状态
-                if let pending = pendingValue, let new, abs(new - pending) < 0.05 {
-                    pendingValue = nil
-                }
-            }
         }
     }
 
@@ -391,18 +381,15 @@ struct SetpointCard: View {
             && (displayValue.map { $0 + delta >= minTemp && $0 + delta <= maxTemp } ?? false)
 
         return Button {
-            // 基于当前显示值（含待生效值）计算，连按多次会逐次累加
-            guard let current = displayValue else { return }
-            // 保留一位小数：((current + delta) * 10).rounded() / 10
-            // 括号位置很关键 —— 写成 (current + delta * 10) 等于 current/10 + delta，
-            // 会把 43 变成 5.3，远低于下限 35，云端直接返回 500。
-            let next = ((current + delta) * 10).rounded() / 10
-            // 夹在设备允许的范围内，超范围同样会被云端拒绝
-            let clamped = min(maxTemp, max(minTemp, next))
-            pendingValue = clamped
-            Task {
-                await store.send([writeSetpointKey: clamped])
-            }
+            // 累加逻辑放在 store 层：基准值取自同步更新的 attrs，
+            // 连按多次才能逐次累加（用 View 的 @State 会丢按压）。
+            store.stepTemperature(
+                key: writeSetpointKey,
+                readKeys: setpointKeys,
+                delta: delta,
+                min: minTemp,
+                max: maxTemp
+            )
         } label: {
             Text(title)
                 .font(.title2.weight(.medium))

@@ -131,6 +131,32 @@ final class AppStore: ObservableObject {
     /// 是否有指令正在飞行中
     private var sendInFlight = false
 
+    /// 按下 +/− 时调用。
+    ///
+    /// 基准值取自 monitor.attrs —— 它在乐观更新时是【同步】写入的，
+    /// 所以连续快速按压时每次都能读到上一次的结果并逐次累加。
+    /// 之前用 View 层的 @State 做基准，两次按压之间若 SwiftUI 还没重渲染，
+    /// 第二次会读到旧值，导致按 7 次只生效 6 次。
+    func stepTemperature(
+        key: String,
+        readKeys: [String],
+        delta: Double,
+        min lower: Double,
+        max upper: Double
+    ) {
+        let current = ReadAttr.firstNumber(readKeys, in: monitor.attrs) ?? lower
+        // 保留一位小数：((current + delta) * 10).rounded() / 10
+        // 括号位置很关键 —— 写成 (current + delta * 10) 等于 current/10 + delta，
+        // 会把 43 变成 5.3，远低于下限 35，云端直接返回 500。
+        let next = ((current + delta) * 10).rounded() / 10
+        // 夹在设备允许的范围内，超范围同样会被云端拒绝
+        let clamped = min(upper, max(lower, next))
+
+        // 同步写入本地状态：界面立刻更新，且下一次按压能读到它
+        monitor.applyLocal([key: clamped])
+        Task { await send([key: clamped]) }
+    }
+
     /// 下发控制指令。
     ///
     /// 连续快速按压时不能丢弃后发的指令 —— 用户按 5 次 + 应该得到 +5，
@@ -177,15 +203,14 @@ final class AppStore: ObservableObject {
                 monitor.appendLog("❌ 指令失败 \(message)")
                 errorMessage = message
             }
-
-            // 飞行期间没有新指令了，才等设备应用后核对一次
-            if pendingPayload.isEmpty {
-                // 云端接受指令后设备需要几秒才实际应用并上报，
-                // 立刻拉取会读到旧值，把乐观更新覆盖回去。
-                try? await Task.sleep(for: .seconds(3))
-                await monitor.refreshNow()
-            }
         }
+
+        // 队列排空后再核对一次。
+        // 云端接受指令后设备需要几秒才实际应用并上报，立刻拉取会读到旧值。
+        // 注意这里在循环【之外】—— 放在循环里会让每条指令都等 3 秒，
+        // 连续按压时指令被拉得很开，体感像卡顿。
+        try? await Task.sleep(for: .seconds(3))
+        await monitor.refreshNow()
     }
 
     /// token 过期：用 Keychain 里的密码静默重登一次。
