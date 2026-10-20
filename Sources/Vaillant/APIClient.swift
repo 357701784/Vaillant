@@ -223,26 +223,43 @@ enum WritableAttr {
     static let modeCH = "Mode_Setting_CH"
 
     // 生活热水
-    /// 生活热水设定温度（集成的 set_temperature 用的就是这个键）
-    static let dhwSetpoint = "DHW_setpoint"
+    /// 生活热水设定温度。
+    ///
+    /// 实测这台机器生效的是 `Flow_Temperature_Setpoint`（出水设定）——
+    /// 用户上次开热水时设的值就记在这里。集成用的 `DHW_setpoint`
+    /// 在本机是只读字段，写它会返回 500。
+    static let dhwSetpoint = "Flow_Temperature_Setpoint"
+    /// 备用键，仅在首选键缺失时使用
+    static let dhwSetpointFallback = "DHW_setpoint"
     /// 热水开关。集成写的是 WarmStar_Tank_Loading_Enable，值为 1/0
     static let dhwEnable = "WarmStar_Tank_Loading_Enable"
 }
 
 /// 读取生活热水数据时的候选键，按优先级排列。
-/// 与集成 water_heater.py 的 DHW_SETPOINT_ATTRS / DHW_ENABLE_ATTRS 一致。
+/// 首选 Flow_Temperature_Setpoint —— 实测本机只有它会随设置变化。
 enum ReadAttr {
     static let dhwSetpointKeys = [
-        "Current_DHW_Setpoint", "DHW_readSetPoint", "DHW_setpoint",
+        WritableAttr.dhwSetpoint,
+        "Current_DHW_Setpoint",
+        "DHW_readSetPoint",
+        WritableAttr.dhwSetpointFallback,
     ]
     static let dhwEnableKeys = [
         "WarmStar_Tank_Loading_Enable", "Enabled_DHW", "DHW_switch",
     ]
     static let heatingEnableKeys = ["Heating_Enable", "Enabled_Heating"]
+    static let dhwUpperLimitKey = "Upper_Limitation_of_DHW_Setpoint"
+    static let dhwLowerLimitKey = "Lower_Limitation_of_DHW_Setpoint"
 
     /// 按优先级取第一个有值的键
     static func first(_ keys: [String], in attrs: [String: Any]) -> Any? {
         for key in keys where attrs[key] != nil { return attrs[key] }
+        return nil
+    }
+
+    /// 按优先级取第一个读得到数值的键
+    static func firstNumber(_ keys: [String], in attrs: [String: Any]) -> Double? {
+        for key in keys { if let n = Catalog.number(attrs[key]) { return n } }
         return nil
     }
 }

@@ -277,10 +277,19 @@ struct SetpointCard: View {
     let writeEnableKey: String?
     let onText: String
     let offText: String
-    let minTemp: Double
-    let maxTemp: Double
+    let fallbackMin: Double
+    let fallbackMax: Double
     let step: Double
     let attrs: [String: Any]
+
+    /// 上下限优先用设备上报的值。硬编码的范围来自集成源码的兜底常量，
+    /// 未必符合本机 —— 超出真实上限会让云端返回 500。
+    private var minTemp: Double {
+        ReadAttr.firstNumber([ReadAttr.dhwLowerLimitKey], in: attrs) ?? fallbackMin
+    }
+    private var maxTemp: Double {
+        ReadAttr.firstNumber([ReadAttr.dhwUpperLimitKey], in: attrs) ?? fallbackMax
+    }
 
     private var setpoint: Double? {
         ReadAttr.first(setpointKeys, in: attrs).flatMap { Catalog.number($0) }
@@ -291,7 +300,14 @@ struct SetpointCard: View {
     private var busy: Bool { store.sending }
 
     /// 该通道是否真的可用（网关会推 0 表示未启用）
+    /// 该通道是否真的可用（网关会推 0 表示未启用）
     private var available: Bool { (setpoint ?? 0) > 0 }
+
+    /// 温度调节的前置条件。
+    ///
+    /// 不要求通道开启 —— 实测关闭状态下也能改温度（用户确认过），
+    /// 之前的 500 是写错了字段，不是前置校验。
+    private var canAdjust: Bool { available && !busy }
 
     var body: some View {
         Card(title, systemImage: icon) {
@@ -354,7 +370,7 @@ struct SetpointCard: View {
     }
 
     private func step(_ title: String, delta: Double) -> some View {
-        let usable = available && !busy
+        let usable = canAdjust
             && (setpoint.map { $0 + delta >= minTemp && $0 + delta <= maxTemp } ?? false)
 
         return Button {
@@ -646,7 +662,8 @@ struct DashboardView: View {
                             writeEnableKey: WritableAttr.dhwEnable,
                             onText: "开启热水",
                             offText: "关闭热水",
-                            minTemp: 35, maxTemp: 65, step: 1,
+                            step: 1,
+                            fallbackMin: 35, fallbackMax: 65,
                             attrs: attrs
                         )
                         SetpointCard(
@@ -657,8 +674,8 @@ struct DashboardView: View {
                             writeSetpointKey: WritableAttr.setpointComfort,
                             writeEnableKey: WritableAttr.heatingEnable,
                             onText: "开启采暖",
-                            offText: "关闭采暖",
-                            minTemp: 10, maxTemp: 30, step: 0.5,
+                            step: 0.5,
+                            fallbackMin: 10, fallbackMax: 30,
                             attrs: attrs
                         )
                         TemperatureCompareCard(
