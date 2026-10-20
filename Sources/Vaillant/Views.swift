@@ -308,6 +308,9 @@ struct SetpointCard: View {
     /// 该通道是否真的可用（网关会推 0 表示未启用）
     private var available: Bool { (setpoint ?? 0) > 0 }
 
+    /// 该通道是否用采暖曲线控制（地暖）
+    private var curveControlled: Bool { writeSetpointKey == WritableAttr.setpointComfort }
+
     /// 温度调节的前置条件。
     ///
     /// 不要求通道开启 —— 实测关闭状态下也能改温度（用户确认过），
@@ -362,10 +365,12 @@ struct SetpointCard: View {
                     // 这类机型的地暖不是「室温设定」控制，而是靠采暖曲线调节。
                     // 室温设定恒为 0，不该显示成一个看起来能调的数字。
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("该机型用采暖曲线控制，无室温设定值")
+                        Text(curveControlled
+                             ? "该机型用采暖曲线控制，无室温设定值"
+                             : "云端未返回该通道的设定值")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        if let curve = Catalog.number(attrs["Heating_Curve"]) {
+                        if curveControlled, let curve = Catalog.number(attrs["Heating_Curve"]) {
                             Text("当前采暖曲线：\(String(format: "%.2f", curve))")
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.secondary)

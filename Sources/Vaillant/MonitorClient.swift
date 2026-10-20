@@ -175,13 +175,20 @@ final class MonitorClient: NSObject, ObservableObject {
                 if json["type"] as? String == "2",
                    let update = json["data"] as? [String: Any],
                    !update.isEmpty {
-                    // 每帧都是全量，直接替换
-                    attrs = update
+                    // 云端推的帧不保证都是全量：订阅后的第一帧是全量，
+                    // 之后可能只带变化的字段。整体替换会把其余字段全丢掉，
+                    // 界面就变成一片空白。必须合并。
+                    let isFull = update.count > 50
+                    if isFull {
+                        attrs = update
+                    } else {
+                        for (key, value) in update { attrs[key] = value }
+                    }
                     lastUpdate = Date()
                     state = .live
                     diagnostic = nil
                     failureCount = 0
-                    appendLog("收到 \(update.count) 个字段")
+                    appendLog("收到 \(update.count) 个字段\(isFull ? "（全量）" : "（增量）")")
                     return
                 }
             } catch {
