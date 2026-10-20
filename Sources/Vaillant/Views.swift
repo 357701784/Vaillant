@@ -297,8 +297,6 @@ struct SetpointCard: View {
     private var enabled: Bool? {
         ReadAttr.first(enableKeys, in: attrs).flatMap { Catalog.isOn($0) }
     }
-    private var busy: Bool { store.sending }
-
     /// 界面显示的值。
     ///
     /// 直接用 setpoint —— 它来自 monitor.attrs，而乐观更新是同步写入的，
@@ -316,7 +314,7 @@ struct SetpointCard: View {
     /// 不要求通道开启 —— 实测关闭状态下也能改温度（用户确认过），
     /// 之前的 500 是写错了字段，不是前置校验。
     ///
-    /// 也不要求 !busy —— 发送期间必须还能继续按，否则连按 5 次只会生效 1 次。
+    /// 发送期间也必须能继续按，否则连按 5 次只会生效 1 次。
     private var canAdjust: Bool { available }
 
     var body: some View {
@@ -357,7 +355,9 @@ struct SetpointCard: View {
                                 .foregroundStyle((enabled ?? false) ? Color.orange : Color.green)
                         }
                         .buttonStyle(.plain)
-                        .disabled(busy)
+                        // 不因温度指令在飞行中而禁用 —— 开关和温度是
+                        // 两个独立属性，队列能同时容纳（key 不同不冲突）。
+                        // 之前的禁用会让按钮在调温后灰上好几秒。
                     }
                 }
 
