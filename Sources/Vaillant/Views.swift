@@ -674,6 +674,7 @@ struct DashboardView: View {
                             writeSetpointKey: WritableAttr.setpointComfort,
                             writeEnableKey: WritableAttr.heatingEnable,
                             onText: "开启采暖",
+                            offText: "关闭采暖",
                             fallbackMin: 10, fallbackMax: 30,
                             step: 0.5,
                             attrs: attrs
