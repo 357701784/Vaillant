@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 卡片与行
 
@@ -597,9 +598,20 @@ struct DebugLogView: View {
                     Button("清空") { store.monitor.clearLog() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("重新连接") {
-                        store.monitor.clearLog()
-                        store.reconnect()
+                    Menu {
+                        Button {
+                            UIPasteboard.general.string = store.monitor.log.joined(separator: "\n")
+                        } label: {
+                            Label("复制全部日志", systemImage: "doc.on.doc")
+                        }
+                        Button {
+                            store.monitor.clearLog()
+                            store.reconnect()
+                        } label: {
+                            Label("清空并重新连接", systemImage: "arrow.clockwise")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -622,6 +634,13 @@ struct DashboardView: View {
     @State private var showDebug = false
 
     private var attrs: [String: Any] { store.monitor.attrs }
+
+    /// 原始数据的纯文本形式，用于一键复制
+    private var rawPlainText: String {
+        attrs.keys.sorted()
+            .map { "\($0) = \(String(describing: attrs[$0] ?? "—"))" }
+            .joined(separator: "\n")
+    }
 
     /// 控制失败提示。指令常被云端静默忽略，没有提示用户会以为按钮坏了。
     @ViewBuilder
@@ -742,6 +761,15 @@ struct DashboardView: View {
                     .background(Color(.systemGroupedBackground))
                     .navigationTitle("原始数据")
                     .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                UIPasteboard.general.string = rawPlainText
+                            } label: {
+                                Label("复制全部", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
                 }
             }
             .sheet(isPresented: $showAccount) {
