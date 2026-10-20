@@ -275,6 +275,8 @@ struct SetpointCard: View {
     let writeSetpointKey: String
     /// 下发开关用的键；nil 表示不提供开关
     let writeEnableKey: String?
+    /// 开关旁的文字，说明控制什么
+    let switchLabel: String
     let fallbackMin: Double
     let fallbackMax: Double
     let step: Double
@@ -337,18 +339,18 @@ struct SetpointCard: View {
                     step("+", delta: step)
 
                     if let key = writeEnableKey {
-                        // 原生 Toggle：滑动圆钮直接表达开/关。
-                        // 开关就在卡片里，卡片标题已说明控制的是什么，
-                        // 不需要额外文字。
+                        // 原生 Toggle：滑动圆钮直接表达开/关，
+                        // 旁边的文字说明这个开关控制什么。
                         Toggle(isOn: Binding(
                             get: { enabled ?? false },
                             set: { newValue in
                                 store.send([key: newValue ? 1 : 0])
                             }
                         )) {
-                            EmptyView()
+                            Text(switchLabel)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle((enabled ?? false) ? Color.orange : Color.secondary)
                         }
-                        .labelsHidden()
                         .toggleStyle(.switch)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         // 不因温度指令在飞行中而禁用 —— 开关和温度是
@@ -672,6 +674,7 @@ struct DashboardView: View {
                             enableKeys: ReadAttr.dhwEnableKeys,
                             writeSetpointKey: WritableAttr.dhwSetpoint,
                             writeEnableKey: WritableAttr.dhwEnable,
+                            switchLabel: "热水",
                             fallbackMin: 35, fallbackMax: 65,
                             // 集成用 PRECISION_HALVES，支持 0.5 度步进
                             step: 0.5,
@@ -684,6 +687,7 @@ struct DashboardView: View {
                             enableKeys: ReadAttr.heatingEnableKeys,
                             writeSetpointKey: WritableAttr.setpointComfort,
                             writeEnableKey: WritableAttr.heatingEnable,
+                            switchLabel: "采暖",
                             fallbackMin: 10, fallbackMax: 30,
                             step: 0.5,
                             attrs: attrs
