@@ -19,7 +19,6 @@ final class AppStore: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var devices: [Device] = []
     @Published private(set) var device: Device?
-    @Published private(set) var sending = false
     @Published private(set) var username: String?
 
     let monitor: MonitorClient
@@ -125,32 +124,66 @@ final class AppStore: ObservableObject {
 
     // MARK: 控制
 
+    /// 正在下发的指令
+    /// 等待发送的指令。连续按压时只保留最新值。
+    private var pendingPayload: [String: Any] = [:]
+    /// 是否有指令正在飞行中
+    private var sendInFlight = false
+
+    /// 下发控制指令。
+    ///
+    /// 连续快速按压时不能丢弃后发的指令 —— 用户按 5 次 + 应该得到 +5，
+    /// 而不是 +1。所以这里合并待发指令：飞行期间的新指令覆盖旧的，
+    /// 当前这条发完后立刻把合并后的值发出去。
     func send(_ payload: [String: Any]) async {
-        guard let device, let token, !sending else { return }
+        guard let device, let token else { return }
+
+        // 立即乐观更新：界面马上反映操作，也让后续按压基于新值计算。
+        monitor.applyLocal(payload)
+
+        // 合并待发指令（后来的覆盖先前的）
+        pendingPayload.merge(payload) { _, new in new }
+
+        // 已有指令在飞：等它完成后由下面的循环统一处理
+        guard !sendInFlight else { return }
+        sendInFlight = true
         sending = true
-        defer { sending = false }
+        defer {
+            sendInFlight = false
+            sending = false
+        }
 
-        // 记录下发前后的关键值：控制指令常被云端静默忽略，
-        // 没有日志就无从判断是键名不对还是设备拒绝。
-        let keys = payload.keys.joined(separator: ",")
-        let values = payload.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
-        monitor.appendLog("下发指令 \(keys) → \(values)")
+        while !pendingPayload.isEmpty {
+            let batch = pendingPayload
+            pendingPayload = [:]
 
-        do {
-            let response = try await api.control(device: device, token: token, attrs: payload)
-            let code = response["code"].map { "\($0)" } ?? "-"
-            let msg = response["msg"].map { "\($0)" } ?? ""
-            monitor.appendLog("云端响应 code=\(code) \(msg)")
-            if let number = response["code"] as? Int, number != 200 {
-                errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(number)）" : msg
+            let keys = batch.keys.joined(separator: ",")
+            let values = batch.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            monitor.appendLog("下发指令 \(keys) → \(values)")
+
+            do {
+                let response = try await api.control(device: device, token: token, attrs: batch)
+                let code = response["code"].map { "\($0)" } ?? "-"
+                let msg = response["msg"].map { "\($0)" } ?? ""
+                monitor.appendLog("云端响应 code=\(code) \(msg)")
+                if let number = response["code"] as? Int, number != 200 {
+                    errorMessage = msg.isEmpty ? "控制指令被拒绝（code \(number)）" : msg
+                }
+            } catch let e as ApiError where e.isTokenExpired {
+                await reauthenticate()
+            } catch {
+                let message = (error as? ApiError)?.message ?? error.localizedDescription
+                monitor.appendLog("❌ 指令失败 \(message)")
+                errorMessage = message
             }
-            // 云端确认后属性会通过轮询推回来，这里不手动改本地状态
-        } catch let e as ApiError where e.isTokenExpired {
-            await reauthenticate()
-        } catch {
-            let message = (error as? ApiError)?.message ?? error.localizedDescription
-            monitor.appendLog("❌ 指令失败 \(message)")
-            errorMessage = message
+
+            // 飞行期间没有新指令了，才等设备应用后核对一次
+            if pendingPayload.isEmpty {
+                // 云端接受指令后设备需要几秒才实际应用并上报，
+                // 立刻拉取会读到旧值，把乐观更新覆盖回去。
+                try? await Task.sleep(for: .seconds(3))
+                await monitor.refreshNow()
+            }
         }
     }
 

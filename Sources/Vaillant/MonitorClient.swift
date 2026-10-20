@@ -110,6 +110,21 @@ final class MonitorClient: NSObject, ObservableObject {
         }
     }
 
+    /// 乐观更新：控制指令下发后立即改本地值。
+    ///
+    /// 轮询间隔 10 秒，若等下一轮才更新，用户会觉得按钮没反应。
+    /// 这里先把值改掉让界面立刻反馈，随后由轮询核对真实值。
+    func applyLocal(_ updates: [String: Any]) {
+        guard !updates.isEmpty else { return }
+        for (key, value) in updates { attrs[key] = value }
+        appendLog("本地已更新：\(updates.map { "\($0.key)=\($0.value)" }.joined(separator: " "))")
+    }
+
+    /// 立刻拉一次数据，不等轮询
+    func refreshNow() async {
+        await fetchOnce()
+    }
+
     /// 开一条短连接，订阅，取一帧，断开
     private func fetchOnce() async {
         guard let device, let token, wantConnection, !inFlight else { return }
