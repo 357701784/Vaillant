@@ -688,7 +688,8 @@ struct DashboardView: View {
                             onText: "开启热水",
                             offText: "关闭热水",
                             fallbackMin: 35, fallbackMax: 65,
-                            step: 1,
+                            // 集成用 PRECISION_HALVES，支持 0.5 度步进
+                            step: 0.5,
                             attrs: attrs
                         )
                         SetpointCard(
