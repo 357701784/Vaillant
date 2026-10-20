@@ -275,8 +275,6 @@ struct SetpointCard: View {
     let writeSetpointKey: String
     /// 下发开关用的键；nil 表示不提供开关
     let writeEnableKey: String?
-    let onText: String
-    let offText: String
     let fallbackMin: Double
     let fallbackMax: Double
     let step: Double
@@ -339,25 +337,22 @@ struct SetpointCard: View {
                     step("+", delta: step)
 
                     if let key = writeEnableKey {
-                        Button {
-                            store.send([key: (enabled ?? false) ? 0 : 1])
-                        } label: {
-                            Text((enabled ?? false) ? offText : onText)
-                                .font(.subheadline.weight(.medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(
-                                    (enabled ?? false)
-                                        ? Color.orange.opacity(0.16)
-                                        : Color.green.opacity(0.16),
-                                    in: RoundedRectangle(cornerRadius: 10)
-                                )
-                                .foregroundStyle((enabled ?? false) ? Color.orange : Color.green)
+                        // 原生 Toggle：滑动圆钮直接表达开/关。
+                        // 开关就在卡片里，卡片标题已说明控制的是什么，
+                        // 不需要额外文字。
+                        Toggle(isOn: Binding(
+                            get: { enabled ?? false },
+                            set: { newValue in
+                                store.send([key: newValue ? 1 : 0])
+                            }
+                        )) {
+                            EmptyView()
                         }
-                        .buttonStyle(.plain)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                         // 不因温度指令在飞行中而禁用 —— 开关和温度是
                         // 两个独立属性，队列能同时容纳（key 不同不冲突）。
-                        // 之前的禁用会让按钮在调温后灰上好几秒。
                     }
                 }
 
@@ -677,8 +672,6 @@ struct DashboardView: View {
                             enableKeys: ReadAttr.dhwEnableKeys,
                             writeSetpointKey: WritableAttr.dhwSetpoint,
                             writeEnableKey: WritableAttr.dhwEnable,
-                            onText: "开启热水",
-                            offText: "关闭热水",
                             fallbackMin: 35, fallbackMax: 65,
                             // 集成用 PRECISION_HALVES，支持 0.5 度步进
                             step: 0.5,
@@ -691,8 +684,6 @@ struct DashboardView: View {
                             enableKeys: ReadAttr.heatingEnableKeys,
                             writeSetpointKey: WritableAttr.setpointComfort,
                             writeEnableKey: WritableAttr.heatingEnable,
-                            onText: "开启采暖",
-                            offText: "关闭采暖",
                             fallbackMin: 10, fallbackMax: 30,
                             step: 0.5,
                             attrs: attrs
