@@ -339,6 +339,7 @@ struct SetpointCard: View {
                     step("+", delta: step)
 
                     if let key = writeEnableKey {
+                        Spacer(minLength: 8)
                         // 原生 Toggle：滑动圆钮直接表达开/关，
                         // 旁边的文字说明这个开关控制什么。
                         Toggle(isOn: Binding(
@@ -352,7 +353,7 @@ struct SetpointCard: View {
                                 .foregroundStyle((enabled ?? false) ? Color.orange : Color.secondary)
                         }
                         .toggleStyle(.switch)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .fixedSize()
                         // 不因温度指令在飞行中而禁用 —— 开关和温度是
                         // 两个独立属性，队列能同时容纳（key 不同不冲突）。
                     }
