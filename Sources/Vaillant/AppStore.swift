@@ -124,7 +124,8 @@ final class AppStore: ObservableObject {
 
     // MARK: 控制
 
-    /// 正在下发的指令
+    /// 是否有指令正在下发。用于禁用开关这类会引发状态跳变的操作。
+    @Published private(set) var sending = false
     /// 等待发送的指令。连续按压时只保留最新值。
     private var pendingPayload: [String: Any] = [:]
     /// 是否有指令正在飞行中
