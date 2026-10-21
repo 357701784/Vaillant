@@ -10,11 +10,11 @@
 
 一个 iOS 原生 App（SwiftUI），登录威能账号后直连 `vicapi.vaillant.com.cn`：
 
-- **实时显示设备全部 157 个属性**（官方 App 只显示其中一部分）
 - **生活热水温度调节**（0.5°C 步进）+ 独立开关
 - 出水 / 回水温度对比，温差过大自动标色
 - 燃气消耗、运行状态、故障码等分组展示
-- 原始数据页 / 调试日志，支持一键复制全部
+- 设备共上报 **157 个属性**，其中 59 个做了中文映射分组显示，
+  其余在「原始数据」页里完整可见（官方 App 只显示其中一小部分）
 
 ---
 
@@ -137,9 +137,15 @@ Tools/
 |---|---|
 | 生活热水设定温度 | `Flow_Temperature_Setpoint` |
 | 生活热水开关 | `WarmStar_Tank_Loading_Enable`（值 1/0）|
-| 地暖设定温度 | `Room_Temperature_Setpoint_Comfort` |
+| 地暖设定温度 | `Room_Temperature_Setpoint_Comfort`（⚠️ 本机恒为 0，见「已知问题」）|
 | 地暖开关 | `Heating_Enable` |
 | 地暖模式 | `Mode_Setting_CH`（开机为 `"Cruising"`）|
+
+> 地暖卡片的温度范围需要区分两套：
+> 代码里的 `fallbackMin/fallbackMax` 是 **10–30°C**（室温语义），
+> 而设备上报的 `Lower/Upper_Limitation_of_CH_Setpoint` 是 **30–75°C**（水温语义）。
+> 运行时优先用设备上报的值，所以实际可选范围是 30–75；
+> fallback 只在设备不报限制时兜底。
 
 > ⚠️ **生活热水的设定温度字段和官方 App 显示的不完全一致**。
 > 设备同时上报 `DHW_setpoint`(35)、`DHW_readSetPoint`(35)、
@@ -239,14 +245,24 @@ Tools/
 
 - **地暖水温无法调节**。`CH_readSetPoint` 只读（写 45 写不进去），
   `Room_Temperature_Setpoint_Comfort` 恒为 0，`Heating_Curve` 恒为 0。
-  官方 App 能设地暖水温，但用的字段尚未定位。
+  官方 App 能设地暖水温（它显示的是「水温」，不是室温），
+  但用的字段尚未定位。
+
   定位方法：`python3 Tools/probe_cloud.py --diff`，
-  在官方 App 里改一次地暖水温后看差分。
+  在官方 App 里改一次**地暖**水温后看差分 —— 变化的那个字段就是答案。
+
+  补充：已对比集成 v1.2.5 与 v1.4.0，**两版的 climate 代码完全一致**
+  （读写都用 `Room_Temperature_Setpoint_Comfort`），
+  所以「新版不能调水温、老版能调」不是集成代码的差异，
+  更可能是云端对该键的解释变了。
 - **燃气消耗卡片有 8 个重复字段**（今日/昨日/本月/今年 × 地暖/热水，
   全部等于 `000080bf`）。云端似乎把同一个累计表读数填到了所有时段字段。
   计划改为只保留运行时长、点火次数、功率等真正有信息量的项。
 - `gas_consumption` 等值的**单位未知**，集成作者也未解析（名字里带 "raw"）。
-  未经确认前不宜标注单位。
+  未经确认前不宜标注单位。定位方法：`python3 Tools/probe_cloud.py --gas`
+  （放热水后看这些字段有没有变）。
+- **故障与维护卡片**已处理：过滤掉 65535 哨兵值后，
+  无故障时显示「✓ 无故障」而不是 11 行 65535。
 
 ---
 
