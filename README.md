@@ -133,6 +133,29 @@ Tools/
 
 ### 可写属性
 
+> **实测结论（2026-10-19，familyCONNECT / LN1GBQ20-VU CN 206/5-5）**
+>
+> 这台设备**只有一个可写的温度字段**。在地暖开启状态下逐个试写，结果：
+>
+> | 写入 | 结果 |
+> |---|---|
+> | `Heating_Enable = 1` | ✅ 生效（0→1）|
+> | `CH_readSetPoint = 40` | ❌ 无变化（只读）|
+> | `Room_Temperature_Setpoint_Comfort = 40` | ❌ 无变化（只读）|
+> | `Heating_Curve = 40` | ❌ 无变化（只读）|
+> | `Flow_Temperature_Setpoint = 41` | ✅ 生效（43→41）|
+>
+> `Flow_Temperature_Setpoint` 是**当前活动回路的水温设定**，
+> `Time_slot_type`（`CH` / `DHW`）说明这个值当前归哪个回路。
+>
+> **推论**：集成 v1.4.0 的地暖温控写 `Room_Temperature_Setpoint_Comfort`，
+> 而该字段在本机只读 —— 所以**集成的地暖温控是无效的**，
+> 官方 App 之所以能"调水温"，写的就是 `Flow_Temperature_Setpoint`。
+>
+> 这也解释了「新版只能调体感温度、老版能调水温」：
+> 不是集成的差异（v1.2.5 与 v1.4.0 的 climate 代码完全一致），
+> 而是同一字段在两版 UI 里被冠以了不同的语义。
+
 | 用途 | 键 |
 |---|---|
 | 生活热水设定温度 | `Flow_Temperature_Setpoint` |
