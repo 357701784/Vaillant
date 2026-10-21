@@ -670,44 +670,27 @@ enum BuildInfo {
 
 // MARK: - 主界面
 
-struct DashboardView: View {
+// MARK: - 共用框架
+
+/// 两页共用的外壳：导航栈 + 连接状态条 + 错误提示 + 工具栏。
+struct MonitorScaffold<Content: View, Toolbar: View>: View {
     @EnvironmentObject var store: AppStore
-    @State private var showRaw = false
-    @State private var showAccount = false
-    @State private var showDebug = false
+
+    let title: String
+    let content: Content
+    let toolbarContent: Toolbar
+
+    init(
+        title: String,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder toolbarContent: () -> Toolbar
+    ) {
+        self.title = title
+        self.content = content()
+        self.toolbarContent = toolbarContent()
+    }
 
     private var attrs: [String: Any] { store.monitor.attrs }
-
-    /// 原始数据的纯文本形式，用于一键复制
-    private var rawPlainText: String {
-        attrs.keys.sorted()
-            .map { "\($0) = \(String(describing: attrs[$0] ?? "—"))" }
-            .joined(separator: "\n")
-    }
-
-    /// 控制失败提示。指令常被云端静默忽略，没有提示用户会以为按钮坏了。
-    @ViewBuilder
-    private var errorToast: some View {
-        if let error = store.errorMessage {
-            VStack {
-                Spacer()
-                Text(error)
-                    .font(.footnote)
-                    .padding(.horizontal, 16).padding(.vertical, 11)
-                    .background(.red, in: Capsule())
-                    .foregroundStyle(.white)
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .onAppear {
-                        Task {
-                            try? await Task.sleep(for: .seconds(4))
-                            store.errorMessage = nil
-                        }
-                    }
-            }
-            .animation(.easeInOut, value: store.errorMessage)
-        }
-    }
 
     var body: some View {
         NavigationStack {
@@ -730,100 +713,174 @@ struct DashboardView: View {
                         )
                         .padding(.top, 60)
                     } else {
-                        SetpointCard(
-                            title: "生活热水",
-                            icon: "drop.fill",
-                            setpointKeys: ReadAttr.dhwSetpointKeys,
-                            enableKeys: ReadAttr.dhwEnableKeys,
-                            writeSetpointKey: WritableAttr.dhwSetpoint,
-                            writeEnableKey: WritableAttr.dhwEnable,
-                            switchLabel: "热水",
-                            fallbackMin: 35, fallbackMax: 65,
-                            // 集成用 PRECISION_HALVES，支持 0.5 度步进
-                            step: 0.5,
-                            attrs: attrs
-                        )
-                        SetpointCard(
-                            title: "地暖",
-                            icon: "thermometer.medium",
-                            setpointKeys: [WritableAttr.setpointComfort],
-                            enableKeys: ReadAttr.heatingEnableKeys,
-                            writeSetpointKey: WritableAttr.setpointComfort,
-                            writeEnableKey: WritableAttr.heatingEnable,
-                            switchLabel: "采暖",
-                            fallbackMin: 10, fallbackMax: 30,
-                            step: 0.5,
-                            attrs: attrs
-                        )
-                        TemperatureCompareCard(
-                            flow: Catalog.temperature(attrs["Flow_temperature"]),
-                            ret: Catalog.temperature(attrs["return_temperature"])
-                        )
-                        ForEach(AttributeSpec.Group.allCases) { group in
-                            AttributeGroupView(group: group, attrs: attrs)
-                        }
+                        content
                     }
                 }
                 .padding(16)
             }
-            .overlay(alignment: .bottom) { errorToast }
+            .overlay(alignment: .bottom) { ErrorToast() }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle(store.device?.name ?? "威能")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showAccount = true
-                    } label: {
-                        Image(systemName: "person.crop.circle")
+            .toolbar { toolbarContent }
+        }
+    }
+}
+
+/// 控制失败提示条。指令常被云端静默忽略，没有提示用户会以为按钮坏了。
+struct ErrorToast: View {
+    @EnvironmentObject var store: AppStore
+
+    var body: some View {
+        if let error = store.errorMessage {
+            VStack {
+                Spacer()
+                Text(error)
+                    .font(.footnote)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(.red, in: Capsule())
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .onAppear {
+                        Task {
+                            try? await Task.sleep(for: .seconds(4))
+                            store.errorMessage = nil
+                        }
                     }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showDebug = true
-                    } label: {
-                        Image(systemName: "ladybug")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        store.reconnect()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showRaw = true
-                    } label: {
-                        Image(systemName: "list.bullet.indent")
-                    }
+            }
+            .animation(.easeInOut, value: store.errorMessage)
+        }
+    }
+}
+
+// MARK: - 首页
+
+/// 首页：只放控制类卡片 —— 生活热水、地暖、出水/回水。
+struct HomeView: View {
+    @EnvironmentObject var store: AppStore
+    @State private var showAccount = false
+
+    private var attrs: [String: Any] { store.monitor.attrs }
+
+    var body: some View {
+        MonitorScaffold(title: store.device?.name ?? "威能") {
+            SetpointCard(
+                title: "生活热水",
+                icon: "drop.fill",
+                setpointKeys: ReadAttr.dhwSetpointKeys,
+                enableKeys: ReadAttr.dhwEnableKeys,
+                writeSetpointKey: WritableAttr.dhwSetpoint,
+                writeEnableKey: WritableAttr.dhwEnable,
+                switchLabel: "热水",
+                fallbackMin: 35, fallbackMax: 65,
+                // 集成用 PRECISION_HALVES，支持 0.5 度步进
+                step: 0.5,
+                attrs: attrs
+            )
+            SetpointCard(
+                title: "地暖",
+                icon: "thermometer.medium",
+                setpointKeys: [WritableAttr.setpointComfort],
+                enableKeys: ReadAttr.heatingEnableKeys,
+                writeSetpointKey: WritableAttr.setpointComfort,
+                writeEnableKey: WritableAttr.heatingEnable,
+                switchLabel: "采暖",
+                fallbackMin: 10, fallbackMax: 30,
+                step: 0.5,
+                attrs: attrs
+            )
+            TemperatureCompareCard(
+                flow: Catalog.temperature(attrs["Flow_temperature"]),
+                ret: Catalog.temperature(attrs["return_temperature"])
+            )
+        } toolbarContent: {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showAccount = true
+                } label: {
+                    Image(systemName: "person.crop.circle")
                 }
             }
-            .sheet(isPresented: $showDebug) {
-                DebugLogView()
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    store.reconnect()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
-            .sheet(isPresented: $showRaw) {
-                NavigationStack {
-                    ScrollView {
-                        RawDataView(attrs: attrs).padding(16)
-                    }
-                    .background(Color(.systemGroupedBackground))
-                    .navigationTitle("原始数据")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                UIPasteboard.general.string = rawPlainText
-                            } label: {
-                                Label("复制全部", systemImage: "doc.on.doc")
-                            }
+        }
+        .sheet(isPresented: $showAccount) {
+            AccountView()
+        }
+    }
+}
+
+// MARK: - 数据页
+
+/// 数据页：其余的设备读数分组展示。
+struct DataView: View {
+    @EnvironmentObject var store: AppStore
+    @State private var showRaw = false
+    @State private var showDebug = false
+
+    private var attrs: [String: Any] { store.monitor.attrs }
+
+    /// 原始数据的纯文本形式，用于一键复制
+    private var rawPlainText: String {
+        attrs.keys.sorted()
+            .map { "\($0) = \(String(describing: attrs[$0] ?? "—"))" }
+            .joined(separator: "\n")
+    }
+
+    var body: some View {
+        MonitorScaffold(title: "数据") {
+            ForEach(AttributeSpec.Group.allCases) { group in
+                AttributeGroupView(group: group, attrs: attrs)
+            }
+        } toolbarContent: {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showDebug = true
+                } label: {
+                    Image(systemName: "ladybug")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    store.reconnect()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showRaw = true
+                } label: {
+                    Image(systemName: "list.bullet.indent")
+                }
+            }
+        }
+        .sheet(isPresented: $showDebug) {
+            DebugLogView()
+        }
+        .sheet(isPresented: $showRaw) {
+            NavigationStack {
+                ScrollView {
+                    RawDataView(attrs: attrs).padding(16)
+                }
+                .background(Color(.systemGroupedBackground))
+                .navigationTitle("原始数据")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            UIPasteboard.general.string = rawPlainText
+                        } label: {
+                            Label("复制全部", systemImage: "doc.on.doc")
                         }
                     }
                 }
-            }
-            .sheet(isPresented: $showAccount) {
-                AccountView()
             }
         }
     }

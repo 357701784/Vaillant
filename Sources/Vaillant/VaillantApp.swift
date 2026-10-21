@@ -26,11 +26,17 @@ struct RootView: View {
                 .background(Color(.systemGroupedBackground))
 
         case .ready:
-            // 多设备时先给选择页，单设备时直接进主界面
-            if store.devices.count > 1 {
+            // 多设备时先选一个，选完才进主界面
+            if store.device == nil {
                 NavigationStack { DeviceListView() }
             } else {
-                DashboardView()
+                TabView {
+                    HomeView()
+                        .tabItem { Label("首页", systemImage: "house.fill") }
+
+                    DataView()
+                        .tabItem { Label("数据", systemImage: "chart.bar.xaxis") }
+                }
             }
         }
     }
