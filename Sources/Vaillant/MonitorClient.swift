@@ -109,7 +109,17 @@ final class MonitorClient: NSObject, ObservableObject {
             while !Task.isCancelled {
                 await self?.fetchOnce()
                 guard let self, !Task.isCancelled, self.wantConnection else { return }
-                try? await Task.sleep(for: .seconds(self.pollInterval))
+
+                // 连续失败时指数退避。
+                // 实测服务端对顺序连接不限速（同一 token 并发上限约 3 条，
+                // 本 App 始终只有 1 条），但网络抖动时固定间隔硬撞没有意义。
+                let delay: Double
+                if self.failureCount > 0 {
+                    delay = min(self.pollInterval * pow(2, Double(self.failureCount - 1)), 60)
+                } else {
+                    delay = self.pollInterval
+                }
+                try? await Task.sleep(for: .seconds(delay))
             }
         }
     }
