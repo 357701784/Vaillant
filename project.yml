@@ -20,6 +20,7 @@ targets:
     platform: iOS
     sources:
       - Sources/Vaillant
+      - Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cn.vaillant.selfuse.app
@@ -28,11 +29,17 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # 不签名编译，产物装到手机前由 AltStore/SideStore 重签
         CODE_SIGN_IDENTITY: ""
         CODE_SIGN_STYLE: Manual
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
         DEVELOPMENT_TEAM: ""
-    info:
-      path: Resources/Info.plist
+
+# 注意：这里刻意【不】使用 XcodeGen 的 `info:` 块。
+# 该块会让 XcodeGen 每次生成工程时重新生成 Resources/Info.plist，
+# 覆盖掉手写版本 —— 导致 CFBundleDisplayName、UILaunchScreen、
+# 屏幕方向等键全部丢失（App 在主屏显示成 "Vaillant" 而非「威能」）。
+# 现在改为由 INFOPLIST_FILE + GENERATE_INFOPLIST_FILE=NO 直接引用手写文件。
