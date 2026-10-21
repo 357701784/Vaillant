@@ -673,57 +673,46 @@ enum BuildInfo {
 // MARK: - 共用框架
 
 /// 两页共用的外壳：导航栈 + 连接状态条 + 错误提示 + 工具栏。
+/// 两页共用的内容区：状态条 + 滚动内容 + 错误提示。
+/// 导航栈和工具栏由各页自己声明（工具栏项的类型和页面绑定更顺）。
 struct MonitorScaffold<Content: View>: View {
     @EnvironmentObject var store: AppStore
 
-    let title: String
     let content: Content
-    let toolbarContent: any ToolbarContent
 
-    init(
-        title: String,
-        @ViewBuilder content: () -> Content,
-        @ToolbarContentBuilder toolbarContent: () -> some ToolbarContent
-    ) {
-        self.title = title
+    init(@ViewBuilder content: () -> Content) {
         self.content = content()
-        self.toolbarContent = toolbarContent()
     }
 
     private var attrs: [String: Any] { store.monitor.attrs }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    ConnectionBanner(
-                        state: store.monitor.state,
-                        lastUpdate: store.monitor.lastUpdate,
-                        diagnostic: store.monitor.diagnostic
-                    ) {
-                        store.reconnect()
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                    if attrs.isEmpty {
-                        ContentUnavailableView(
-                            "等待数据",
-                            systemImage: "antenna.radiowaves.left.and.right.slash",
-                            description: Text("正在等待设备上报属性")
-                        )
-                        .padding(.top, 60)
-                    } else {
-                        content
-                    }
+        ScrollView {
+            VStack(spacing: 12) {
+                ConnectionBanner(
+                    state: store.monitor.state,
+                    lastUpdate: store.monitor.lastUpdate,
+                    diagnostic: store.monitor.diagnostic
+                ) {
+                    store.reconnect()
                 }
-                .padding(16)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                if attrs.isEmpty {
+                    ContentUnavailableView(
+                        "等待数据",
+                        systemImage: "antenna.radiowaves.left.and.right.slash",
+                        description: Text("正在等待设备上报属性")
+                    )
+                    .padding(.top, 60)
+                } else {
+                    content
+                }
             }
-            .overlay(alignment: .bottom) { ErrorToast() }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
+            .padding(16)
         }
+        .overlay(alignment: .bottom) { ErrorToast() }
+        .background(Color(.systemGroupedBackground))
     }
 }
 
@@ -764,8 +753,9 @@ struct HomeView: View {
     private var attrs: [String: Any] { store.monitor.attrs }
 
     var body: some View {
-        MonitorScaffold(title: store.device?.name ?? "威能") {
-            SetpointCard(
+        NavigationStack {
+            MonitorScaffold {
+                SetpointCard(
                 title: "生活热水",
                 icon: "drop.fill",
                 setpointKeys: ReadAttr.dhwSetpointKeys,
@@ -790,23 +780,27 @@ struct HomeView: View {
                 step: 0.5,
                 attrs: attrs
             )
-            TemperatureCompareCard(
-                flow: Catalog.temperature(attrs["Flow_temperature"]),
-                ret: Catalog.temperature(attrs["return_temperature"])
-            )
-        } toolbarContent: {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showAccount = true
-                } label: {
-                    Image(systemName: "person.crop.circle")
-                }
+                TemperatureCompareCard(
+                    flow: Catalog.temperature(attrs["Flow_temperature"]),
+                    ret: Catalog.temperature(attrs["return_temperature"])
+                )
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    store.reconnect()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+            .navigationTitle(store.device?.name ?? "威能")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAccount = true
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.reconnect()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
             }
         }
@@ -834,30 +828,35 @@ struct DataView: View {
     }
 
     var body: some View {
-        MonitorScaffold(title: "数据") {
-            ForEach(AttributeSpec.Group.allCases) { group in
-                AttributeGroupView(group: group, attrs: attrs)
-            }
-        } toolbarContent: {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showDebug = true
-                } label: {
-                    Image(systemName: "ladybug")
+        NavigationStack {
+            MonitorScaffold {
+                ForEach(AttributeSpec.Group.allCases) { group in
+                    AttributeGroupView(group: group, attrs: attrs)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    store.reconnect()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+            .navigationTitle("数据")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showDebug = true
+                    } label: {
+                        Image(systemName: "ladybug")
+                    }
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showRaw = true
-                } label: {
-                    Image(systemName: "list.bullet.indent")
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.reconnect()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showRaw = true
+                    } label: {
+                        Image(systemName: "list.bullet.indent")
+                    }
                 }
             }
         }
