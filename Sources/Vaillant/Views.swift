@@ -742,6 +742,13 @@ struct DashboardView: View {
                         Image(systemName: "ladybug")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        store.reconnect()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showRaw = true
