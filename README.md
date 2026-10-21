@@ -94,12 +94,24 @@ Tools/
 
 ### 关键常量
 
-| 项 | 值 |
-|---|---|
-| 主机 | `https://vicapi.vaillant.com.cn` |
-| appkey | `9109fb3ea6c04cf1be34c71ff82a51ec` |
-| app 身份 | `Basic YXBwLXc6aW90MlExWDNY`（即 `app-q:iot2Q1X4c`）|
-| User-Agent | `VaillantPlus/230329005 CFNetwork/1485 Darwin/23.1.0` |
+| 项 | 值 | 解码后 |
+|---|---|---|
+| 主机 | `https://vicapi.vaillant.com.cn` | — |
+| appkey | `9109fb3ea6c04cf1be34c71ff82a51ec` | 32 位十六进制应用标识 |
+| app 身份 | `Basic YXBwLXc6aW90MlExWDNY` | `app-w:iot2Q1X3X`（用户名:密码）|
+| User-Agent | `VaillantPlus/230329005 CFNetwork/1485 Darwin/23.1.0` | 伪装成官方 iOS App |
+
+这些常量来自 `vaillant-plus-cn-api`，它是从官方 App 提取的（源码里是 base64 编码后再解一层）。
+
+**两级凭据**：
+
+| | 内容 | 范围 |
+|---|---|---|
+| 应用级 | `appkey` + `app_auth` | 所有用户共用，官方 App 的身份 |
+| 用户级 | 你的账号密码 → 换来的 token | 只属于你 |
+
+登录时用 `Basic(app_auth)` + form 里放你的账号密码，换来 `access_token`；
+之后每个请求带 `appkey` 头 + `Authorization: Bearer <token>`。
 
 ### 接口
 
