@@ -673,17 +673,17 @@ enum BuildInfo {
 // MARK: - 共用框架
 
 /// 两页共用的外壳：导航栈 + 连接状态条 + 错误提示 + 工具栏。
-struct MonitorScaffold<Content: View, Toolbar: View>: View {
+struct MonitorScaffold<Content: View>: View {
     @EnvironmentObject var store: AppStore
 
     let title: String
     let content: Content
-    let toolbarContent: Toolbar
+    let toolbarContent: any ToolbarContent
 
     init(
         title: String,
         @ViewBuilder content: () -> Content,
-        @ViewBuilder toolbarContent: () -> Toolbar
+        @ToolbarContentBuilder toolbarContent: () -> some ToolbarContent
     ) {
         self.title = title
         self.content = content()
