@@ -30,7 +30,9 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # 不设 ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME：
+        # 一旦指定，工具栏按钮等系统控件就会用这个颜色着色（会变成橙色），
+        # 不指定则沿用系统默认的蓝色。
         # 不签名编译，产物装到手机前由 AltStore/SideStore 重签
         CODE_SIGN_IDENTITY: ""
         CODE_SIGN_STYLE: Manual
