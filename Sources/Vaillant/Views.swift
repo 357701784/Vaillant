@@ -785,7 +785,7 @@ struct DashboardView: View {
                         Image(systemName: "ladybug")
                     }
                 }
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         store.reconnect()
                     } label: {
