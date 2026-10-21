@@ -500,18 +500,61 @@ struct AttributeGroupView: View {
     let group: AttributeSpec.Group
     let attrs: [String: Any]
 
-    /// 该组里云端实际有值的项。
+    /// 该组里云端实际有值的项，哨兵值（65535 等）不算。
     private var items: [AttributeSpec] {
-        Catalog.specs.filter { $0.group == group && attrs[$0.key] != nil }
+        Catalog.specs.filter { spec in
+            guard spec.group == group else { return false }
+            guard let value = attrs[spec.key] else { return false }
+            // 65535 = 0xFFFF 是「无内容」占位值，显示出来只是噪音
+            return !Catalog.isSentinel(value)
+        }
+    }
+
+    /// 故障组里真的有故障的项
+    private var activeFaults: [AttributeSpec] {
+        items.filter { Catalog.isFault($0, value: attrs[$0.key]) == true }
+    }
+
+    /// 故障组里不是故障码的项（如保养剩余时间）
+    private var otherItems: [AttributeSpec] {
+        items.filter { Catalog.isFault($0, value: attrs[$0.key]) == nil }
     }
 
     var body: some View {
-        if !items.isEmpty {
+        // 故障组即使没有故障也显示 —— 让用户知道确实在监控，
+        // 而不是怀疑这个功能没工作
+        if !items.isEmpty || group == .fault {
             Card(group.rawValue, systemImage: group.icon) {
                 VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, spec in
-                        DataRow(spec: spec, value: attrs[spec.key])
-                        if index < items.count - 1 { Divider() }
+                    if group == .fault {
+                        if activeFaults.isEmpty {
+                            // 故障码槽位全是 0xFFFF —— 明确说「无故障」，
+                            // 而不是让用户对着 11 行 65535 猜
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("无故障")
+                                    .font(.subheadline.weight(.medium))
+                                Spacer()
+                            }
+                            .padding(.vertical, 2)
+                            if !otherItems.isEmpty { Divider() }
+                        } else {
+                            ForEach(Array(activeFaults.enumerated()), id: \.element.id) { index, spec in
+                                DataRow(spec: spec, value: attrs[spec.key])
+                                if index < activeFaults.count - 1 { Divider() }
+                            }
+                            if !otherItems.isEmpty { Divider() }
+                        }
+                        ForEach(Array(otherItems.enumerated()), id: \.element.id) { index, spec in
+                            DataRow(spec: spec, value: attrs[spec.key])
+                            if index < otherItems.count - 1 { Divider() }
+                        }
+                    } else {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, spec in
+                            DataRow(spec: spec, value: attrs[spec.key])
+                            if index < items.count - 1 { Divider() }
+                        }
                     }
                 }
             }

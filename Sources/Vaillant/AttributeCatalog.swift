@@ -199,6 +199,16 @@ enum Catalog {
         "65535", "0xffff", "65534", "4294967295",
     ]
 
+    /// 哨兵值：表示"该字段无内容"，显示出来只会是噪音。
+    /// 65535 (0xFFFF) 是威能设备的通用占位值 —— 故障码槽位为空、
+    /// 保养时间未知等都用它。
+    static func isSentinel(_ value: Any?) -> Bool {
+        guard let value else { return true }
+        if let n = number(value) { return n == 65535 || n == 65534 }
+        let text = String(describing: value).trimmingCharacters(in: .whitespaces).lowercased()
+        return text == "0xffff" || text == "65535" || text == "-1"
+    }
+
     static func isFault(_ spec: AttributeSpec, value: Any?) -> Bool? {
         guard spec.group == .fault, spec.key.hasPrefix("Fault") || spec.key.hasPrefix("Gateway_Fault") else {
             return nil
