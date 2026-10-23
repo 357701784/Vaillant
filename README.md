@@ -133,48 +133,43 @@ Tools/
 
 ### 可写属性
 
-> **实测结论（2026-10-19，familyCONNECT / LN1GBQ20-VU CN 206/5-5）**
+> **实测结论（2026-10-23，familyCONNECT / LN1GBQ20-VU CN 206/5-5）**
 >
-> 这台设备**只有一个可写的温度字段**。在地暖开启状态下逐个试写，结果：
+> 两个回路各有独立字段，都实测确认过：
 >
-> | 写入 | 结果 |
-> |---|---|
-> | `Heating_Enable = 1` | ✅ 生效（0→1）|
-> | `CH_readSetPoint = 40` | ❌ 无变化（只读）|
-> | `Room_Temperature_Setpoint_Comfort = 40` | ❌ 无变化（只读）|
-> | `Heating_Curve = 40` | ❌ 无变化（只读）|
-> | `Flow_Temperature_Setpoint = 41` | ✅ 生效（43→41）|
+> | 回路 | 字段 | 限制 | 写入条件 |
+> |---|---|---|---|
+> | **地暖水温** | `Flow_Temperature_Setpoint` | CH 30–75 | 随时可写 |
+> | **生活热水设定** | `DHW_setpoint` | DHW 35–70 | ⚠️ **必须先开热水** |
 >
-> `Flow_Temperature_Setpoint` 是**当前活动回路的水温设定**，
-> `Time_slot_type`（`CH` / `DHW`）说明这个值当前归哪个回路。
+> 验证方式：在官方 App 里改地暖水温 → `Flow_Temperature_Setpoint` 跟着变（39.5）；
+> 写 `DHW_setpoint` 时若热水关闭，**云端返回 200 但值不变**（静默失败）；
+> 开热水瞬间设备会自己把当前设定值载入 `DHW_setpoint`，之后才能正常写入。
+>
+> **只读的候选字段**（都试写过，无任何变化）：
+> `CH_readSetPoint`、`Room_Temperature_Setpoint_Comfort`、`Heating_Curve`、
+> `Room_Temperature_Setpoint_ECO`。
 >
 > **推论**：集成 v1.4.0 的地暖温控写 `Room_Temperature_Setpoint_Comfort`，
-> 而该字段在本机只读 —— 所以**集成的地暖温控是无效的**，
-> 官方 App 之所以能"调水温"，写的就是 `Flow_Temperature_Setpoint`。
+> 而该字段在本机只读 —— 所以**集成的地暖温控是无效的**。
+> 老版（elwinchen v1.2.4）写的是 `Flow_Temperature_Setpoint`，能生效。
+> 这就是「新版只能调体感温度、老版能调水温」的原因。
 >
-> 这也解释了「新版只能调体感温度、老版能调水温」：
-> 不是集成的差异（v1.2.5 与 v1.4.0 的 climate 代码完全一致），
-> 而是同一字段在两版 UI 里被冠以了不同的语义。
+> 另一个副作用：**热水关闭时设备会把 `DHW_setpoint` 重置成下限 35**，
+> 云端读到的就是个废值。App 因此需要自己记住设定值（见 `dhwCache`）。
 
 | 用途 | 键 |
 |---|---|
-| 生活热水设定温度 | `Flow_Temperature_Setpoint` |
+| 生活热水设定温度 | `DHW_setpoint`（需先开热水）|
 | 生活热水开关 | `WarmStar_Tank_Loading_Enable`（值 1/0）|
-| 地暖设定温度 | `Room_Temperature_Setpoint_Comfort`（⚠️ 本机恒为 0，见「已知问题」）|
+| 地暖水温 | `Flow_Temperature_Setpoint` |
 | 地暖开关 | `Heating_Enable` |
 | 地暖模式 | `Mode_Setting_CH`（开机为 `"Cruising"`）|
 
-> 地暖卡片的温度范围需要区分两套：
-> 代码里的 `fallbackMin/fallbackMax` 是 **10–30°C**（室温语义），
-> 而设备上报的 `Lower/Upper_Limitation_of_CH_Setpoint` 是 **30–75°C**（水温语义）。
-> 运行时优先用设备上报的值，所以实际可选范围是 30–75；
-> fallback 只在设备不报限制时兜底。
-
-> ⚠️ **生活热水的设定温度字段和官方 App 显示的不完全一致**。
-> 设备同时上报 `DHW_setpoint`(35)、`DHW_readSetPoint`(35)、
-> `Flow_Temperature_Setpoint`(43)。实测只有 `Flow_Temperature_Setpoint`
-> 是真正生效的那个 —— 写另两个云端返回 200 但值不变（静默失败）。
-> 集成源码用的是 `DHW_setpoint`，所以它的生活热水温控大概率是无效的。
+> 温度范围：运行时优先用设备上报的限制
+> （地暖 `Lower/Upper_Limitation_of_CH_Setpoint` 30–75、
+> 热水 `Lower/Upper_Limitation_of_DHW_Setpoint` 35–70），
+> 代码里的 `fallbackMin/fallbackMax` 只在设备不报限制时兜底。
 
 ---
 
@@ -262,22 +257,52 @@ Tools/
 原本继承的是 `NSObject`，`@Published` 属性**完全不生效** —— 数据正常进来了，
 界面却永远停在第一帧。排查这个花了好几轮。
 
+### 11. 云端会静默忽略写入
+
+写 `DHW_setpoint` 时云端**返回 200、`code:200`、msg「本次请求成功！」**，
+但值纹丝不动。
+
+这比报错难查得多 —— 不看读回值就完全以为成功了。
+**必须每次写入后读回验证**，别信响应。
+
+### 12. 回路没开时写入会被丢弃
+
+生活热水的写入要求 `WarmStar_Tank_Loading_Enable=1`。
+关闭状态下写，返回 200 但不生效。
+
+而且**开热水瞬间设备会自己把当前设定值载入 `DHW_setpoint`** ——
+所以要读到真实设定值，得先开热水。
+
+### 13. 字段会被重置成默认值
+
+热水关闭后，`DHW_setpoint` 会被设备**重置成下限 35**
+（`Lower_Limitation_of_DHW_Setpoint`）。
+
+刚写完是 40，关掉热水待一会儿再读就成了 35。
+界面直接显示云端值会误导用户 —— 得自己缓存。
+
+### 14. 两个回路共用一个「看起来像」字段
+
+`Flow_Temperature_Setpoint`（出水温度）一度被当成生活热水的设定值，
+因为它当时是 43（而用户设的热水温度正好是 43）。
+
+实际上它是**地暖**的水温。判据是**用官方 App 改一个回路、看哪个字段变**，
+而不是看数值像不像。
+
+> 教训：字段语义不能靠数值巧合推断，要靠**受控实验**。
+
 ---
 
 ## 已知问题 / 待办
 
-- **地暖水温无法调节**。`CH_readSetPoint` 只读（写 45 写不进去），
-  `Room_Temperature_Setpoint_Comfort` 恒为 0，`Heating_Curve` 恒为 0。
-  官方 App 能设地暖水温（它显示的是「水温」，不是室温），
-  但用的字段尚未定位。
-
-  定位方法：`python3 Tools/probe_cloud.py --diff`，
-  在官方 App 里改一次**地暖**水温后看差分 —— 变化的那个字段就是答案。
-
-  补充：已对比集成 v1.2.5 与 v1.4.0，**两版的 climate 代码完全一致**
-  （读写都用 `Room_Temperature_Setpoint_Comfort`），
-  所以「新版不能调水温、老版能调」不是集成代码的差异，
-  更可能是云端对该键的解释变了。
+- ~~地暖水温无法调节~~ —— **已解决**。字段是 `Flow_Temperature_Setpoint`，
+  读写都正常。详见「可写属性」一节。
+- **生活热水必须先开热水才能调温**。云端在热水关闭时会静默忽略
+  `DHW_setpoint` 的写入（返回 200 但值不变）。
+  App 的处理：先暂存用户设定的值，热水开启后自动补发。
+- **热水关闭时设备把 `DHW_setpoint` 重置成下限 35**，
+  云端读到的值是废值。App 用本地缓存（`dhwCache`）还原上次设定值。
+  新装的用户需要先开一次热水，缓存才有内容。
 - **燃气消耗卡片有 8 个重复字段**（今日/昨日/本月/今年 × 地暖/热水，
   全部等于 `000080bf`）。云端似乎把同一个累计表读数填到了所有时段字段。
   计划改为只保留运行时长、点火次数、功率等真正有信息量的项。
