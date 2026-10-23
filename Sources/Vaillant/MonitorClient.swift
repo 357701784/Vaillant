@@ -124,6 +124,9 @@ final class MonitorClient: NSObject, ObservableObject {
         }
     }
 
+    /// 属性更新回调。用于触发「回路开启后补发暂存指令」这类联动。
+    var onAttrsUpdated: (([String: Any]) -> Void)?
+
     /// 本地乐观设置、尚未被设备确认的值。
     ///
     /// 设备应用新设定有延迟：云端已接受指令，但设备实际改到位要几秒。
@@ -258,6 +261,7 @@ final class MonitorClient: NSObject, ObservableObject {
                     diagnostic = nil
                     failureCount = 0
                     appendLog("收到 \(update.count) 个字段\(isFull ? "（全量）" : "（增量）")")
+                    onAttrsUpdated?(attrs)
                     return
                 }
             } catch {

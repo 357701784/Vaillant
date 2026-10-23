@@ -282,6 +282,11 @@ struct SetpointCard: View {
     let fallbackMax: Double
     let step: Double
     let attrs: [String: Any]
+    /// 待生效的设定值（回路未开启时暂存的目标温度）。
+    /// 非 nil 时显示它，并提示「开启后生效」。
+    let pendingValue: Double?
+    /// 该回路的写入是否要求先开启（生活热水需要）
+    let needsEnabled: Bool
 
     /// 上下限优先用设备上报的值。硬编码的范围来自集成源码的兜底常量，
     /// 未必符合本机 —— 超出真实上限会让云端返回 500。
@@ -300,15 +305,16 @@ struct SetpointCard: View {
     }
     /// 界面显示的值。
     ///
-    /// 直接用 setpoint —— 它来自 monitor.attrs，而乐观更新是同步写入的，
-    /// 所以连按多次时每次都能看到最新的累计值。
-    private var displayValue: Double? { setpoint }
+    /// 有待生效值时优先显示它（用户刚设的目标），
+    /// 否则用设备实际值 —— 它来自 monitor.attrs，
+    /// 而乐观更新是同步写入的，连按多次时每次都能看到最新的累计值。
+    private var displayValue: Double? { pendingValue ?? setpoint }
 
     /// 该通道是否真的可用（网关会推 0 表示未启用）
     private var available: Bool { (setpoint ?? 0) > 0 }
 
     /// 该通道是否用采暖曲线控制（地暖）
-    private var curveControlled: Bool { writeSetpointKey == WritableAttr.setpointComfort }
+    private var curveControlled: Bool { writeSetpointKey == WritableAttr.chSetpoint }
 
     /// 温度调节的前置条件。
     ///
@@ -360,6 +366,16 @@ struct SetpointCard: View {
                     }
                 }
 
+                if pendingValue != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.caption2)
+                        Text("回路未开启，已暂存 \(String(format: "%.1f", pendingValue!))°C，开启后自动生效")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.orange)
+                }
+
                 if !available {
                     // 这类机型的地暖不是「室温设定」控制，而是靠采暖曲线调节。
                     // 室温设定恒为 0，不该显示成一个看起来能调的数字。
@@ -392,7 +408,8 @@ struct SetpointCard: View {
                 readKeys: setpointKeys,
                 delta: delta,
                 min: minTemp,
-                max: maxTemp
+                max: maxTemp,
+                needsEnabled: needsEnabled
             )
         } label: {
             Text(title)
@@ -766,19 +783,24 @@ struct HomeView: View {
                 fallbackMin: 35, fallbackMax: 65,
                 // 集成用 PRECISION_HALVES，支持 0.5 度步进
                 step: 0.5,
-                attrs: attrs
+                attrs: attrs,
+                // 热水关闭时写入会被云端静默忽略，改为暂存 + 开启后补发
+                pendingValue: store.pendingDHWSetpoint,
+                needsEnabled: true
             )
             SetpointCard(
                 title: "地暖",
                 icon: "thermometer.medium",
-                setpointKeys: [WritableAttr.setpointComfort],
+                setpointKeys: ReadAttr.chSetpointKeys,
                 enableKeys: ReadAttr.heatingEnableKeys,
-                writeSetpointKey: WritableAttr.setpointComfort,
+                writeSetpointKey: WritableAttr.chSetpoint,
                 writeEnableKey: WritableAttr.heatingEnable,
                 switchLabel: "采暖",
-                fallbackMin: 10, fallbackMax: 30,
+                fallbackMin: 30, fallbackMax: 75,
                 step: 0.5,
-                attrs: attrs
+                attrs: attrs,
+                pendingValue: nil,
+                needsEnabled: false
             )
                 TemperatureCompareCard(
                     flow: Catalog.temperature(attrs["Flow_temperature"]),

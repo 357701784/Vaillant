@@ -215,22 +215,26 @@ final class APIClient: NSObject {
 /// 云端接受的控制键，逆自集成源码。
 enum WritableAttr {
     // 地暖
-    /// 开关：true/false，或 1/0
+    /// 地暖出水（水温）设定。
+    ///
+    /// 实测确认（2026-10-23）：在官方 App 里改地暖水温，
+    /// 变化的就是这个字段。配 CH 限制 30–75，与地暖水温范围吻合。
+    static let chSetpoint = "Flow_Temperature_Setpoint"
+    /// 地暖开关
     static let heatingEnable = "Heating_Enable"
-    /// 目标室温
-    static let setpointComfort = "Room_Temperature_Setpoint_Comfort"
-    /// 模式：开机为 "Cruising"
+    /// 地暖模式：开机为 "Cruising"
     static let modeCH = "Mode_Setting_CH"
 
     // 生活热水
     /// 生活热水设定温度。
     ///
-    /// 实测这台机器生效的是 `Flow_Temperature_Setpoint`（出水设定）——
-    /// 用户上次开热水时设的值就记在这里。集成用的 `DHW_setpoint`
-    /// 在本机是只读字段，写它会返回 500。
-    static let dhwSetpoint = "Flow_Temperature_Setpoint"
-    /// 备用键，仅在首选键缺失时使用
-    static let dhwSetpointFallback = "DHW_setpoint"
+    /// 关键前提：**必须先开启热水**（`WarmStar_Tank_Loading_Enable=1`），
+    /// 否则云端会静默忽略这个写入 —— 返回 200 但值不变。
+    /// 实测：开热水瞬间设备会自己把当前设定值载入 DHW_setpoint，
+    /// 之后才能正常写入。
+    static let dhwSetpoint = "DHW_setpoint"
+    /// 只读镜像，跟随 DHW_setpoint
+    static let dhwReadSetpoint = "DHW_readSetPoint"
     /// 热水开关。集成写的是 WarmStar_Tank_Loading_Enable，值为 1/0
     static let dhwEnable = "WarmStar_Tank_Loading_Enable"
 }
@@ -238,11 +242,17 @@ enum WritableAttr {
 /// 读取生活热水数据时的候选键，按优先级排列。
 /// 首选 Flow_Temperature_Setpoint —— 实测本机只有它会随设置变化。
 enum ReadAttr {
+    /// 生活热水设定温度的读取优先级
     static let dhwSetpointKeys = [
         WritableAttr.dhwSetpoint,
+        WritableAttr.dhwReadSetpoint,
         "Current_DHW_Setpoint",
-        "DHW_readSetPoint",
-        WritableAttr.dhwSetpointFallback,
+    ]
+    /// 地暖水温的读取优先级
+    static let chSetpointKeys = [
+        WritableAttr.chSetpoint,
+        "CH_readSetPoint",
+        "Room_Temperature_Setpoint_Comfort",
     ]
     static let dhwEnableKeys = [
         "WarmStar_Tank_Loading_Enable", "Enabled_DHW", "DHW_switch",

@@ -36,6 +36,16 @@ final class AppStore: ObservableObject {
             Task { @MainActor in self?.objectWillChange.send() }
         }
 
+        // 热水开启后，把待生效的设定温度补发下去
+        monitor.onAttrsUpdated = { [weak self] attrs in
+            Task { @MainActor in self?.flushPendingIfPossible(attrs) }
+        }
+
+        // 恢复上次未生效的热水设定（不是敏感信息，放 UserDefaults 即可）
+        if let pending = UserDefaults.standard.object(forKey: Self.pendingKey) as? Double {
+            pendingDHWSetpoint = pending
+        }
+
         if let saved = Keychain.readToken() {
             token = saved
             username = Keychain.readUsername()
@@ -124,6 +134,15 @@ final class AppStore: ObservableObject {
 
     // MARK: 控制
 
+    /// 生活热水待生效的设定温度。
+    ///
+    /// 热水关闭时云端会静默忽略 `DHW_setpoint` 的写入（返回 200 但值不变），
+    /// 所以这里先把用户设定的值存下来，等热水开启后自动补发。
+    @Published private(set) var pendingDHWSetpoint: Double?
+
+    /// UserDefaults 里存待生效设定值的键
+    private static let pendingKey = "pending_dhw_setpoint"
+
     /// 是否有指令正在下发。用于禁用开关这类会引发状态跳变的操作。
     @Published private(set) var sending = false
     /// 等待发送的指令。连续按压时只保留最新值。
@@ -137,12 +156,16 @@ final class AppStore: ObservableObject {
     /// 所以连续快速按压时每次都能读到上一次的结果并逐次累加。
     /// 之前用 View 层的 @State 做基准，两次按压之间若 SwiftUI 还没重渲染，
     /// 第二次会读到旧值，导致按 7 次只生效 6 次。
+    ///
+    /// - Parameter needsEnabled: 该回路的写入是否要求先开启。
+    ///   生活热水必须先开热水，否则云端静默忽略写入。
     func stepTemperature(
         key: String,
         readKeys: [String],
         delta: Double,
         min lower: Double,
-        max upper: Double
+        max upper: Double,
+        needsEnabled: Bool = false
     ) {
         let current = ReadAttr.firstNumber(readKeys, in: monitor.attrs) ?? lower
         // 保留一位小数：((current + delta) * 10).rounded() / 10
@@ -152,9 +175,45 @@ final class AppStore: ObservableObject {
         // 夹在设备允许的范围内，超范围同样会被云端拒绝
         let clamped = min(upper, max(lower, next))
 
+        if needsEnabled, !isCircuitEnabled(key) {
+            // 回路没开：写下去会被云端静默忽略。
+            // 存下目标值，等回路开启后自动补发。
+            pendingDHWSetpoint = clamped
+            UserDefaults.standard.set(clamped, forKey: Self.pendingKey)
+            monitor.appendLog("回路未开启，暂存设定值 \(clamped)，待开启后自动生效")
+            return
+        }
+
         // send() 内部会同步写入本地状态（乐观更新），
         // 所以下一次按压能读到它 —— 累加才不会丢步。
         send([key: clamped])
+    }
+
+    /// 某个回路当前是否处于开启状态
+    private func isCircuitEnabled(_ key: String) -> Bool {
+        let enableKeys: [String]
+        switch key {
+        case WritableAttr.dhwSetpoint: enableKeys = ReadAttr.dhwEnableKeys
+        case WritableAttr.chSetpoint:  enableKeys = ReadAttr.heatingEnableKeys
+        default: return true
+        }
+        guard let raw = ReadAttr.first(enableKeys, in: monitor.attrs) else { return true }
+        return Catalog.isOn(raw) ?? false
+    }
+
+    /// 回路开启后，把暂存的设定温度补发下去
+    private func flushPendingIfPossible(_ attrs: [String: Any]) {
+        guard let pending = pendingDHWSetpoint else { return }
+        let enabled = ReadAttr.first(ReadAttr.dhwEnableKeys, in: attrs)
+            .flatMap { Catalog.isOn($0) } ?? false
+        guard enabled else { return }
+
+        pendingDHWSetpoint = nil
+        UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        monitor.appendLog("热水已开启，补发暂存的设定温度 \(pending)")
+        Task { @MainActor [weak self] in
+            await self?.send([WritableAttr.dhwSetpoint: pending])
+        }
     }
 
     /// 下发控制指令。
