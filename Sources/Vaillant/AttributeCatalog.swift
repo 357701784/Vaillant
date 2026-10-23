@@ -7,6 +7,12 @@ struct AttributeSpec: Identifiable {
     let unit: String?
     let style: Style
     let group: Group
+    /// 同义/镜像字段组。
+    ///
+    /// 威能的云会把同一个寄存器值复制到多个时段字段
+    /// （今日/昨日/本月/今年 × 地暖/热水，8 个字段值全同）。
+    /// 列出来是纯噪音 —— 只留一行，显示其中数值最大的那个。
+    var mirrorKeys: [String] = []
 
     var id: String { key }
 
@@ -84,14 +90,20 @@ enum Catalog {
         .init(key: "DHW_Function", label: "热水功能", unit: nil, style: .raw, group: .deviceState),
 
         // 燃气
-        .init(key: "gas_ch_consumption_today", label: "采暖燃气（今日）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_ch_consumption_yesterday", label: "采暖燃气（昨日）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_ch_consumption_monthly", label: "采暖燃气（本月）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_ch_consumption_yearly", label: "采暖燃气（今年）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_dhw_consumption_today", label: "热水燃气（今日）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_dhw_consumption_yesterday", label: "热水燃气（昨日）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_dhw_consumption_monthly", label: "热水燃气（本月）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gas_dhw_consumption_yearly", label: "热水燃气（今年）", unit: nil, style: .counter, group: .gas),
+        // 燃气消耗：8 个时段字段的值完全相同（实测 000080bf），
+        // 且烧水几天都不变。合并成一行，取数值最大的那个。
+        .init(key: "gas_ch_consumption_today",
+              label: "燃气表读数",
+              unit: nil, style: .counter, group: .gas,
+              mirrorKeys: [
+                "gas_ch_consumption_yesterday",
+                "gas_ch_consumption_monthly",
+                "gas_ch_consumption_yearly",
+                "gas_dhw_consumption_today",
+                "gas_dhw_consumption_yesterday",
+                "gas_dhw_consumption_monthly",
+                "gas_dhw_consumption_yearly",
+              ]),
         .init(key: "gas_consumption", label: "燃气累计", unit: nil, style: .counter, group: .gas),
         // 实测这台 familyCONNECT 实际推的字段名（与集成源码里的 key 不同）
         .init(key: "gasDHWToday", label: "热水燃气（今日·实测）", unit: nil, style: .counter, group: .gas),
@@ -202,6 +214,22 @@ enum Catalog {
     /// 哨兵值：表示"该字段无内容"，显示出来只会是噪音。
     /// 65535 (0xFFFF) 是威能设备的通用占位值 —— 故障码槽位为空、
     /// 保养时间未知等都用它。
+    /// 取一组同义字段中数值最大的那个原始值。
+    /// 用于「8 个时段字段其实是同一个值」的情况。
+    static func mergedRaw(_ spec: AttributeSpec, in attrs: [String: Any]) -> Any? {
+        guard !spec.mirrorKeys.isEmpty else { return attrs[spec.key] }
+        var best: Any?
+        var bestNumber = -Double.infinity
+        for key in [spec.key] + spec.mirrorKeys {
+            guard let value = attrs[key], let n = number(value) else { continue }
+            if n > bestNumber {
+                bestNumber = n
+                best = value
+            }
+        }
+        return best ?? attrs[spec.key]
+    }
+
     static func isSentinel(_ value: Any?) -> Bool {
         guard let value else { return true }
         if let n = number(value) { return n == 65535 || n == 65534 }
@@ -249,10 +277,13 @@ enum Catalog {
             var suffix = spec.unit ?? ""
 
             if spec.group == .gas && isHexString(raw) {
-                // 燃气累计量用十六进制定点格式，低三位是小数：
-                // "000080bf" = 32991 → 32.991 m³
+                // 燃气读数是十六进制定点格式，低三位是小数：
+                // "000080bf" = 32991 → 32.991
+                //
+                // 单位未经确认 —— 集成作者也是原样透传（名字里带 "raw"），
+                // 官方文档也没写。所以不标单位，只标「读数」。
                 text = String(format: "%.3f", n / 1000)
-                suffix = suffix.isEmpty ? "m³" : suffix
+                suffix = suffix.isEmpty ? "读数" : suffix
             } else {
                 switch spec.style {
                 case .pressure: text = String(format: "%.2f", n)

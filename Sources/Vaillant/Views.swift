@@ -33,8 +33,15 @@ struct Card<Content: View>: View {
 struct DataRow: View {
     let spec: AttributeSpec
     let value: Any?
+    /// 全部属性。用于同义字段组取最大值。
+    var attrs: [String: Any] = [:]
 
-    private var formatted: String? { Catalog.format(spec, value: value) }
+    /// 实际显示的原始值：同义字段组里取数值最大的那个
+    private var displayValue: Any? {
+        attrs.isEmpty ? value : Catalog.mergedRaw(spec, in: attrs)
+    }
+
+    private var formatted: String? { Catalog.format(spec, value: displayValue) }
 
     private var isFault: Bool { Catalog.isFault(spec, value: value) == true }
 
@@ -558,18 +565,18 @@ struct AttributeGroupView: View {
                             if !otherItems.isEmpty { Divider() }
                         } else {
                             ForEach(Array(activeFaults.enumerated()), id: \.element.id) { index, spec in
-                                DataRow(spec: spec, value: attrs[spec.key])
+                                DataRow(spec: spec, value: attrs[spec.key], attrs: attrs)
                                 if index < activeFaults.count - 1 { Divider() }
                             }
                             if !otherItems.isEmpty { Divider() }
                         }
                         ForEach(Array(otherItems.enumerated()), id: \.element.id) { index, spec in
-                            DataRow(spec: spec, value: attrs[spec.key])
+                            DataRow(spec: spec, value: attrs[spec.key], attrs: attrs)
                             if index < otherItems.count - 1 { Divider() }
                         }
                     } else {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, spec in
-                            DataRow(spec: spec, value: attrs[spec.key])
+                            DataRow(spec: spec, value: attrs[spec.key], attrs: attrs)
                             if index < items.count - 1 { Divider() }
                         }
                     }
