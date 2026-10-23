@@ -105,9 +105,9 @@ enum Catalog {
                 "gas_dhw_consumption_yearly",
               ]),
         .init(key: "gas_consumption", label: "燃气累计", unit: nil, style: .counter, group: .gas),
-        // 实测这台 familyCONNECT 实际推的字段名（与集成源码里的 key 不同）
-        .init(key: "gasDHWToday", label: "热水燃气（今日·实测）", unit: nil, style: .counter, group: .gas),
-        .init(key: "gasCHToday", label: "采暖燃气（今日·实测）", unit: nil, style: .counter, group: .gas),
+        // 注：gasDHWToday / gasCHToday 曾列在此处，但两者恒为 0、
+        // HA 集成也未收录（集成里一个驼峰命名的字段都没有），
+        // 与其余下划线命名的字段来源不同，已移除。
         .init(key: "Mode_Setting_DHW", label: "热水模式", unit: nil, style: .raw, group: .deviceState),
         .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .gas),
         .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .gas),
