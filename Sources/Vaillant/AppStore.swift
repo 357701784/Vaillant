@@ -178,7 +178,17 @@ final class AppStore: ObservableObject {
         max upper: Double,
         needsEnabled: Bool = false
     ) {
-        let current = ReadAttr.firstNumber(readKeys, in: monitor.attrs) ?? lower
+        // 基准值：有待生效值时必须用它 —— 设备在回路关闭时把
+        // DHW_setpoint 重置成下限 35，若从设备值起算，每次都只会得到 35.5，
+        // 连按多少次都不变。
+        let base: Double
+        if key == WritableAttr.dhwSetpoint {
+            // 与界面显示保持同一来源，避免「显示一个值、按另一个值算」
+            base = dhwDisplayValue ?? lower
+        } else {
+            base = ReadAttr.firstNumber(readKeys, in: monitor.attrs) ?? lower
+        }
+        let current = base
         // 保留一位小数：((current + delta) * 10).rounded() / 10
         // 括号位置很关键 —— 写成 (current + delta * 10) 等于 current/10 + delta，
         // 会把 43 变成 5.3，远低于下限 35，云端直接返回 500。
@@ -189,9 +199,11 @@ final class AppStore: ObservableObject {
         if needsEnabled, !isCircuitEnabled(key) {
             // 回路没开：写下去会被云端静默忽略。
             // 存下目标值，等回路开启后自动补发。
-            pendingDHWSetpoint = clamped
-            UserDefaults.standard.set(clamped, forKey: Self.pendingKey)
-            monitor.appendLog("回路未开启，暂存设定值 \(clamped)，待开启后自动生效")
+            if pendingDHWSetpoint != clamped {
+                pendingDHWSetpoint = clamped
+                UserDefaults.standard.set(clamped, forKey: Self.pendingKey)
+                monitor.appendLog("回路未开启，暂存设定值 \(clamped)，待开启后自动生效")
+            }
             return
         }
 
