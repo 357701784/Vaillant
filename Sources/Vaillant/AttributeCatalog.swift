@@ -112,7 +112,8 @@ enum Catalog {
         // 运行统计 —— 采暖与热水回路的累计运行数据
         .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .runtime),
         .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .runtime),
-        .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .runtime),
+        // 注：CH_startTimes（采暖启动次数）曾列在此处，
+        // 但地暖从未开启过、无法验证它是否变化，暂不展示。
         .init(key: "DHW_workTime", label: "热水运行时长", unit: "分钟", style: .duration, group: .runtime),
         .init(key: "DHW_power", label: "热水功率", unit: nil, style: .raw, group: .runtime),
         // 注：DHW_startTimes（热水启动次数）曾列在此处。
