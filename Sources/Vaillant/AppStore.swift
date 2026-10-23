@@ -38,13 +38,17 @@ final class AppStore: ObservableObject {
 
         // 热水开启后，把待生效的设定温度补发下去
         monitor.onAttrsUpdated = { [weak self] attrs in
-            Task { @MainActor in self?.flushPendingIfPossible(attrs) }
+            Task { @MainActor in
+                self?.updateDHWCache(attrs)
+                self?.flushPendingIfPossible(attrs)
+            }
         }
 
         // 恢复上次未生效的热水设定（不是敏感信息，放 UserDefaults 即可）
         if let pending = UserDefaults.standard.object(forKey: Self.pendingKey) as? Double {
             pendingDHWSetpoint = pending
         }
+        dhwCache = UserDefaults.standard.object(forKey: Self.dhwCacheKey) as? Double
 
         if let saved = Keychain.readToken() {
             token = saved
@@ -142,6 +146,13 @@ final class AppStore: ObservableObject {
 
     /// UserDefaults 里存待生效设定值的键
     private static let pendingKey = "pending_dhw_setpoint"
+    /// UserDefaults 里存「最后一次有效的热水设定值」的键
+    private static let dhwCacheKey = "last_dhw_setpoint"
+
+    /// 热水关闭时，设备会把 DHW_setpoint 重置成下限（实测 35），
+    /// 云端读到的就是个废值。这个缓存记住最后一次有效值，
+    /// 免得界面显示成 35 让用户以为温度被改了。
+    private var dhwCache: Double?
 
     /// 是否有指令正在下发。用于禁用开关这类会引发状态跳变的操作。
     @Published private(set) var sending = false
@@ -187,6 +198,34 @@ final class AppStore: ObservableObject {
         // send() 内部会同步写入本地状态（乐观更新），
         // 所以下一次按压能读到它 —— 累加才不会丢步。
         send([key: clamped])
+    }
+
+    /// 生活热水卡片该显示的温度。
+    ///
+    /// 优先级：用户刚设的待生效值 > 设备当前有效值 > 本地缓存的上次有效值。
+    /// 设备在热水关闭时把 DHW_setpoint 重置成下限 35，
+    /// 那时只能靠缓存还原用户上次设的值。
+    var dhwDisplayValue: Double? {
+        if let pending = pendingDHWSetpoint { return pending }
+        let device = ReadAttr.firstNumber(ReadAttr.dhwSetpointKeys, in: monitor.attrs)
+        if let device, isValidDHWSetpoint(device) { return device }
+        return dhwCache
+    }
+
+    /// 设备上报的热水设定值是否有效（不是重置后的下限默认值）
+    private func isValidDHWSetpoint(_ value: Double) -> Bool {
+        let lower = ReadAttr.firstNumber([ReadAttr.dhwLowerLimitKey], in: monitor.attrs) ?? 35
+        return value > lower
+    }
+
+    /// 更新热水设定缓存
+    private func updateDHWCache(_ attrs: [String: Any]) {
+        guard let value = ReadAttr.firstNumber(ReadAttr.dhwSetpointKeys, in: attrs),
+              isValidDHWSetpoint(value)
+        else { return }
+        guard dhwCache != value else { return }
+        dhwCache = value
+        UserDefaults.standard.set(value, forKey: Self.dhwCacheKey)
     }
 
     /// 某个回路当前是否处于开启状态

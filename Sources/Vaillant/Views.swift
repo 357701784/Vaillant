@@ -282,9 +282,9 @@ struct SetpointCard: View {
     let fallbackMax: Double
     let step: Double
     let attrs: [String: Any]
-    /// 待生效的设定值（回路未开启时暂存的目标温度）。
-    /// 非 nil 时显示它，并提示「开启后生效」。
-    let pendingValue: Double?
+    /// 覆盖显示值。用于生活热水：设备在回路关闭时把设定值重置成下限，
+    /// 这时要用 App 记住的值来显示。
+    let valueOverride: Double?
     /// 该回路的写入是否要求先开启（生活热水需要）
     let needsEnabled: Bool
 
@@ -308,7 +308,7 @@ struct SetpointCard: View {
     /// 有待生效值时优先显示它（用户刚设的目标），
     /// 否则用设备实际值 —— 它来自 monitor.attrs，
     /// 而乐观更新是同步写入的，连按多次时每次都能看到最新的累计值。
-    private var displayValue: Double? { pendingValue ?? setpoint }
+    private var displayValue: Double? { valueOverride ?? setpoint }
 
     /// 该通道是否真的可用（网关会推 0 表示未启用）
     private var available: Bool { (setpoint ?? 0) > 0 }
@@ -366,11 +366,11 @@ struct SetpointCard: View {
                     }
                 }
 
-                if pendingValue != nil {
+                if valueOverride != nil {
                     HStack(spacing: 6) {
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.caption2)
-                        Text("回路未开启，已暂存 \(String(format: "%.1f", pendingValue!))°C，开启后自动生效")
+                        Text("回路未开启，已暂存 \(String(format: "%.1f", valueOverride!))°C，开启后自动生效")
                             .font(.caption2)
                     }
                     .foregroundStyle(.orange)
@@ -784,8 +784,9 @@ struct HomeView: View {
                 // 集成用 PRECISION_HALVES，支持 0.5 度步进
                 step: 0.5,
                 attrs: attrs,
-                // 热水关闭时写入会被云端静默忽略，改为暂存 + 开启后补发
-                pendingValue: store.pendingDHWSetpoint,
+                // 热水关闭时写入会被云端静默忽略，改为暂存 + 开启后补发；
+                // 设备此时还会把字段重置成下限，用 App 记住的值显示
+                valueOverride: store.dhwDisplayValue,
                 needsEnabled: true
             )
             SetpointCard(
@@ -799,7 +800,7 @@ struct HomeView: View {
                 fallbackMin: 30, fallbackMax: 75,
                 step: 0.5,
                 attrs: attrs,
-                pendingValue: nil,
+                valueOverride: nil,
                 needsEnabled: false
             )
                 TemperatureCompareCard(
