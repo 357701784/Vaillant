@@ -115,7 +115,11 @@ enum Catalog {
         .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .runtime),
         .init(key: "DHW_workTime", label: "热水运行时长", unit: "分钟", style: .duration, group: .runtime),
         .init(key: "DHW_power", label: "热水功率", unit: nil, style: .raw, group: .runtime),
-        .init(key: "DHW_startTimes", label: "热水启动次数", unit: "次", style: .counter, group: .runtime),
+        // 注：DHW_startTimes（热水启动次数）曾列在此处。
+        // 实测长期不变 —— 天天洗澡它也一直停在 134，
+        // HA 集成里同样是死值。已移除。
+        // （CH_startTimes 保留：地暖一直关着时它不变是正常的，
+        //   开了地暖应该会增长。）
 
         // 故障
         .init(key: "maintainence_remainTime", label: "距下次保养", unit: nil, style: .raw, group: .fault),
