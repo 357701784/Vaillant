@@ -30,7 +30,7 @@ struct AttributeSpec: Identifiable {
         case temperature = "温度"
         case deviceState = "运行状态"
         case gas = "燃气消耗"
-        case water = "用水"
+        case runtime = "运行统计"
         case fault = "故障与维护"
         case system = "系统"
 
@@ -41,7 +41,7 @@ struct AttributeSpec: Identifiable {
             case .temperature: return "thermometer.medium"
             case .deviceState: return "gearshape.2"
             case .gas: return "flame"
-            case .water: return "drop"
+            case .runtime: return "chart.bar.doc.horizontal"
             case .fault: return "exclamationmark.triangle"
             case .system: return "info.circle"
             }
@@ -109,14 +109,13 @@ enum Catalog {
         // HA 集成也未收录（集成里一个驼峰命名的字段都没有），
         // 与其余下划线命名的字段来源不同，已移除。
         .init(key: "Mode_Setting_DHW", label: "热水模式", unit: nil, style: .raw, group: .deviceState),
-        .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .gas),
-        .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .gas),
-        .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .gas),
-
-        // 用水
-        .init(key: "DHW_workTime", label: "热水运行时长", unit: "分钟", style: .duration, group: .water),
-        .init(key: "DHW_power", label: "热水功率", unit: nil, style: .raw, group: .water),
-        .init(key: "DHW_startTimes", label: "热水启动次数", unit: "次", style: .counter, group: .water),
+        // 运行统计 —— 采暖与热水回路的累计运行数据
+        .init(key: "CH_workTime", label: "采暖运行时长", unit: "分钟", style: .duration, group: .runtime),
+        .init(key: "CH_power", label: "采暖功率", unit: nil, style: .raw, group: .runtime),
+        .init(key: "CH_startTimes", label: "采暖启动次数", unit: "次", style: .counter, group: .runtime),
+        .init(key: "DHW_workTime", label: "热水运行时长", unit: "分钟", style: .duration, group: .runtime),
+        .init(key: "DHW_power", label: "热水功率", unit: nil, style: .raw, group: .runtime),
+        .init(key: "DHW_startTimes", label: "热水启动次数", unit: "次", style: .counter, group: .runtime),
 
         // 故障
         .init(key: "maintainence_remainTime", label: "距下次保养", unit: nil, style: .raw, group: .fault),
