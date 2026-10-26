@@ -265,7 +265,37 @@ Tools/
 写错时会把 43 变成 **5.3**，远低于下限 35，云端直接返回 **500**。
 这个 bug 让人误以为是接口或字段的问题，绕了很久。
 
-### 8. 十六进制与哨兵值
+### 8. 状态字段是位掩码，不是布尔值
+
+`burn_status` 之类的字段看着像开关，其实是**位域**。集成的处理方式暴露了这点：
+
+```python
+elif self.entity_description.key == "Boiler_info3_bit0":
+    self._attr_is_on = str(value).startswith("1")   # 看十进制字符串的首位
+```
+
+实测（系统炉 + 大水箱，放热水时观测）：
+
+| 状态 | 值 | 二进制 | bit4 bit3 bit2 bit1 bit0 |
+|---|---|---|---|
+| 静置 / 加热结束 | 31 | `11111` | 1 1 1 1 1 |
+| **炉子燃烧中** | 24 | `11000` | 1 1 0 0 0 |
+| 刚结束（开关仍开）| 27 | `11011` | 1 1 0 1 1 |
+
+**判据：bit0 与 bit1 同时为 0 = 正在燃烧。**
+（bit0/bit1 谁是点火、谁是燃烧，三个观测点区分不出来；
+bit3/bit4 恒为 1，含义未确认。）
+
+**注意**：用 `isOn()` 把 31 当成「非零 = 开」是错的 —— 各 bit 含义不同。
+按位判断才对。
+
+> 中国区这套私有接口（`vicapi.vaillant.com.cn`）没有公开文档，
+> 网上能查到的 [Viessmann 官方开发文档](https://developer.viessmann-climatesolutions.com/start/inspirations/receive-info-from-the-viessmann-boiler.html)
+> 和 [ViCare 社区](https://community.viessmann.de/t5/Getting-started-programming-with/Some-code-to-receive-info-from-the-viessmann-boiler-v0-2/td-p/192538)
+> 都是全球版 ViCare API（JSON 状态字符串），不适用这里的位掩码。
+> 只能靠实测反推。
+
+### 9. 十六进制与哨兵值
 
 - 燃气消耗等累计量是**十六进制字符串**（如 `000080bf` = 32991），
   `Double("000080bf")` 解析失败
@@ -273,16 +303,16 @@ Tools/
   故障码槽位为空、保养时间未知都用它。显示出来是噪音，应过滤
 - `-50` 是「传感器未接」，`127.5` 是无效的 DHW 温度
 
-### 9. XcodeGen 的 `info:` 块会覆盖手写的 Info.plist
+### 10. XcodeGen 的 `info:` 块会覆盖手写的 Info.plist
 
 见上方「构建」一节。
 
-### 10. `MonitorClient` 必须继承 `ObservableObject`
+### 11. `MonitorClient` 必须继承 `ObservableObject`
 
 原本继承的是 `NSObject`，`@Published` 属性**完全不生效** —— 数据正常进来了，
 界面却永远停在第一帧。排查这个花了好几轮。
 
-### 11. 云端会静默忽略写入
+### 12. 云端会静默忽略写入
 
 写 `DHW_setpoint` 时云端**返回 200、`code:200`、msg「本次请求成功！」**，
 但值纹丝不动。
@@ -290,7 +320,7 @@ Tools/
 这比报错难查得多 —— 不看读回值就完全以为成功了。
 **必须每次写入后读回验证**，别信响应。
 
-### 12. 回路没开时写入会被丢弃
+### 13. 回路没开时写入会被丢弃
 
 生活热水的写入要求 `WarmStar_Tank_Loading_Enable=1`。
 关闭状态下写，返回 200 但不生效。
@@ -298,7 +328,7 @@ Tools/
 而且**开热水瞬间设备会自己把当前设定值载入 `DHW_setpoint`** ——
 所以要读到真实设定值，得先开热水。
 
-### 13. 字段会被重置成默认值
+### 14. 字段会被重置成默认值
 
 热水关闭后，`DHW_setpoint` 会被设备**重置成下限 35**
 （`Lower_Limitation_of_DHW_Setpoint`）。
@@ -306,7 +336,7 @@ Tools/
 刚写完是 40，关掉热水待一会儿再读就成了 35。
 界面直接显示云端值会误导用户 —— 得自己缓存。
 
-### 14. 两个回路共用一个「看起来像」字段
+### 15. 两个回路共用一个「看起来像」字段
 
 `Flow_Temperature_Setpoint`（出水温度）一度被当成生活热水的设定值，
 因为它当时是 43（而用户设的热水温度正好是 43）。
